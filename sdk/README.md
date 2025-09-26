@@ -28,5 +28,3 @@ Create or update `sdk/.env` with your keys and the copied URL:
 ANTHROPIC_API_KEY=sk-...
 WEBSOCKET_DEBUGGER_URL=ws://localhost:9222/devtools/browser/<some-guid>
 ```
-
-
