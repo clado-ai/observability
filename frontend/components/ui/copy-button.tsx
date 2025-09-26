@@ -3,7 +3,13 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 
-export default function CopyButton({ text }: { text: string }) {
+export default function CopyButton({
+  text,
+  full,
+}: {
+  text: string;
+  full?: boolean;
+}) {
   const [copied, setCopied] = useState(false);
   const handleCopy = () => {
     navigator.clipboard.writeText(text);
@@ -13,11 +19,21 @@ export default function CopyButton({ text }: { text: string }) {
     }, 2000);
   };
   return (
-    <Button variant="outline" size={"icon"} onClick={handleCopy}>
+    <Button
+      variant="outline"
+      size={full ? "default" : "icon"}
+      onClick={handleCopy}
+    >
       {copied ? (
-        <i className="bx bx-check"></i>
+        <>
+          <i className="bx bx-check"></i>
+          {full && "Copied"}
+        </>
       ) : (
-        <i className="bx bx-copy"></i>
+        <>
+          <i className="bx bx-copy"></i>
+          {full && "Copy"}
+        </>
       )}
     </Button>
   );
