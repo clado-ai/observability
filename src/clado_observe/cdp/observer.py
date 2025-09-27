@@ -10,8 +10,8 @@ from .utils.screencast import ScreencastUtil
 from .utils.dom import DOMUtil
 from ..utils.vlm_evaluator import VLMEvaluator, RunData, EvaluationResult
 
-
-JsonDict = Dict[str, Any]
+SnapshotData = Dict[int, Any]
+CDPMessage = Dict[str, Any]
 
 
 class CDPObserver:
@@ -121,7 +121,7 @@ class CDPObserver:
         if self._bg_thread:
             self._bg_thread.join(timeout=timeout_s)
 
-    async def snapshot(self) -> Dict[int, Dict[str, Any]]:
+    async def snapshot(self) -> SnapshotData:
         """Capture a DOM snapshot and return the enhanced result with ALL elements."""
         try:
             session_ids = self.client.get_session_ids()
@@ -167,7 +167,7 @@ class CDPObserver:
         """
         return await self.screencast_util.end_screencast()
 
-    async def _handle_event(self, msg: Dict[str, Any]) -> None:
+    async def _handle_event(self, msg: CDPMessage) -> None:
         """
         Handle CDP events.
         Manages screencast events to pass into handler
@@ -180,13 +180,16 @@ class CDPObserver:
                 try:
                     frame_data = msg.get("params", {})
                     session_id = msg.get("sessionId")
-                    await self.screencast_util.handle_screencast_frame(frame_data, session_id)
+                    if isinstance(frame_data, dict):
+                        await self.screencast_util.handle_screencast_frame(frame_data, session_id)
                 except Exception as e:
                     print(f"[DEBUG] Error handling screencast frame: {e}")
 
             if method == "Target.targetCreated":
                 try:
-                    target_info = msg.get("params", {}).get("targetInfo", {})
+                    params = msg.get("params", {})
+                    if isinstance(params, dict):
+                        target_info = params.get("targetInfo", {})
                     new_page_attached = await self.target_manager.handle_target_created(target_info)
                     if new_page_attached:
                         target_id = target_info.get("targetId")

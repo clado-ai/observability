@@ -11,9 +11,24 @@ import subprocess
 import tempfile
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TypedDict
 
 from .base_client import BaseCDPClient
+
+
+class ScreencastParams(TypedDict, total=False):
+    format: str
+    quality: int
+    everyNthFrame: int
+    maxWidth: int
+    maxHeight: int
+
+
+class FrameData(TypedDict, total=False):
+    data: str
+    sessionId: Optional[str]
+    metadata: dict
+    timestamp: float
 
 
 logger = logging.getLogger(__name__)
@@ -26,10 +41,10 @@ class ScreencastUtil:
 
     def __init__(self, client: BaseCDPClient) -> None:
         self.client = client
-        self._screencast_frames: List[Dict[str, Any]] = []
+        self._screencast_frames: List[dict] = []  # Use dict instead of FrameData
         self._screencast_recording = False
         self._temp_dir: Optional[str] = None
-        self._screencast_params: Dict[str, Any] = {}
+        self._screencast_params: dict = {}  # Use dict instead of ScreencastParams
 
     async def start_screencast(self) -> None:
         """Start screencast recording."""
@@ -42,7 +57,7 @@ class ScreencastUtil:
 
             viewport_size = await self._get_viewport_size()
 
-            screencast_params = {
+            screencast_params: Dict[str, Any] = {
                 "format": "png",
                 "quality": 90,
                 "everyNthFrame": 1,
@@ -141,9 +156,7 @@ class ScreencastUtil:
         except Exception as e:
             logger.debug(f"Failed to acknowledge screencast frame: {e}")
 
-    async def handle_screencast_frame(
-        self, frame_data: Dict[str, Any], session_id: Optional[str]
-    ) -> None:
+    async def handle_screencast_frame(self, frame_data: dict, session_id: Optional[str]) -> None:
         """Handle incoming screencast frame data."""
         if not self._screencast_recording:
             return
@@ -189,7 +202,9 @@ class ScreencastUtil:
             frames_dir = os.path.join(self._temp_dir, f"frames_{timestamp}")
             os.makedirs(frames_dir, exist_ok=True)
 
-            sorted_frames = sorted(self._screencast_frames, key=lambda x: x.get("timestamp", 0))
+            sorted_frames = sorted(
+                self._screencast_frames, key=lambda x: float(x.get("timestamp", 0))
+            )
 
             frame_files = []
             timestamps = []
@@ -201,7 +216,7 @@ class ScreencastUtil:
                     with open(frame_path, "wb") as f:
                         f.write(image_data)
                     frame_files.append(frame_path)
-                    timestamps.append(frame_data.get("timestamp", 0))
+                    timestamps.append(float(frame_data.get("timestamp", 0)))
                 except Exception as e:
                     logger.debug(f"Failed to save frame {i}: {e}")
                     continue

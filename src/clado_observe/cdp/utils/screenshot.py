@@ -5,12 +5,27 @@ Handles screenshot capture functionality using CDP Page.captureScreenshot.
 """
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TypedDict, cast
 
 from .base_client import BaseCDPClient
 
 
 logger = logging.getLogger(__name__)
+
+
+class ClipParams(TypedDict, total=False):
+    """Type definition for screenshot clip parameters."""
+
+    type: str
+    nodeId: str
+
+
+class ScreenshotParams(TypedDict, total=False):
+    """Type definition for screenshot capture parameters."""
+
+    format: str
+    quality: int
+    clip: ClipParams
 
 
 class ScreenshotUtil:
@@ -21,29 +36,25 @@ class ScreenshotUtil:
     def __init__(self, client: BaseCDPClient) -> None:
         self.client = client
 
-    async def capture_screenshot(
-        self,
-        session_id: Optional[str] = None,
-        clip: Optional[Dict[str, Any]] = None,
-    ) -> Optional[str]:
+    async def capture_screenshot(self, session_id: Optional[str] = None) -> Optional[str]:
         """
         Capture a screenshot and return the base64 encoded image data as data URI.
 
         Args:
             session_id: Optional session ID for targeted screenshot
-            clip: Optional clipping rectangle
 
         Returns:
             Data URI formatted base64 image data (data:image/png;base64,...) or None if failed
         """
         try:
-            params: Dict[str, Any] = {"format": "png", "quality": 60}
-            if clip:
-                params["clip"] = clip
+            params: ScreenshotParams = {
+                "format": "png",
+                "quality": 60,
+            }
 
             fut = await self.client.send(
                 "Page.captureScreenshot",
-                params=params,
+                params=cast(Dict[str, Any], params),
                 expect_result=True,
                 session_id=session_id,
             )
@@ -88,7 +99,7 @@ class ScreenshotUtil:
             Data URI formatted base64 image data (data:image/png;base64,...) or None if failed
         """
         try:
-            params: Dict[str, Any] = {
+            params: ScreenshotParams = {
                 "format": "png",
                 "quality": 60,
                 "clip": {"type": "node", "nodeId": element_id},
@@ -96,7 +107,7 @@ class ScreenshotUtil:
 
             fut = await self.client.send(
                 "Page.captureScreenshot",
-                params=params,
+                params=cast(Dict[str, Any], params),
                 expect_result=True,
                 session_id=session_id,
             )

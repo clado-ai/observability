@@ -8,9 +8,12 @@ for Chrome DevTools Protocol communication.
 import asyncio
 import json
 import logging
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Awaitable, Callable, Dict, Optional, Union
 
 import websockets
+
+CDPParams = Dict[str, Union[str, int, bool, dict, list]]
+CDPMessage = Dict[str, Union[int, str, CDPParams]]
 
 
 logger = logging.getLogger(__name__)
@@ -34,7 +37,7 @@ class BaseCDPClient:
         self._recv_task: Optional[asyncio.Task] = None
         self._stop_event: Optional[asyncio.Event] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._event_handler: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None
+        self._event_handler: Optional[Callable[[CDPMessage], Awaitable[None]]] = None
 
     async def connect(self) -> None:
         """Connect to the CDP WebSocket."""
@@ -81,7 +84,7 @@ class BaseCDPClient:
     async def send(
         self,
         method: str,
-        params: Optional[Dict[str, Any]] = None,
+        params: Optional[CDPParams] = None,
         *,
         expect_result: bool = False,
         session_id: Optional[str] = None,
@@ -100,7 +103,7 @@ class BaseCDPClient:
         """
         assert self._ws is not None
         self._id_counter += 1
-        msg: Dict[str, Any] = {"id": self._id_counter, "method": method}
+        msg: CDPMessage = {"id": self._id_counter, "method": method}
         if params:
             msg["params"] = params
         if session_id:
@@ -152,7 +155,7 @@ class BaseCDPClient:
             logger.debug(f"Unexpected error in receive loop: {e}")
             return
 
-    async def _handle_event(self, msg: Dict[str, Any]) -> None:
+    async def _handle_event(self, msg: CDPMessage) -> None:
         """Handle CDP events. Override in subclasses for specific event handling."""
         pass
 

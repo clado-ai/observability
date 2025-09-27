@@ -6,9 +6,18 @@ Manages multiple page targets and monitors for new ones.
 """
 
 import logging
-from typing import Any, Dict
+from typing import TypedDict
 
 from .base_client import BaseCDPClient
+
+
+class TargetInfo(TypedDict, total=False):
+    targetId: str
+    type: str
+    title: str
+    url: str
+    attached: bool
+    browserContextId: str
 
 
 logger = logging.getLogger(__name__)
@@ -63,7 +72,7 @@ class TargetManager:
         except Exception as e:
             logger.debug(f"Failed to attach to target {target_id}: {e}")
 
-    async def handle_target_created(self, target_info: Dict[str, Any]) -> bool:
+    async def handle_target_created(self, target_info: TargetInfo) -> bool:
         """Handle new target creation events."""
         target_type = target_info.get("type")
         target_id = target_info.get("targetId")

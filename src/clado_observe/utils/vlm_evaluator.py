@@ -4,10 +4,24 @@ Uses OpenAI's GPT-4 Vision to evaluate screenshots and logs.
 """
 
 import json
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Optional, Tuple, TypedDict
 from dataclasses import dataclass
 from openai import OpenAI
 import re
+
+
+class ImageUrl(TypedDict):
+    """Type definition for image URL object in VLM input."""
+
+    url: str
+    detail: str
+
+
+class ImageContent(TypedDict):
+    """Type definition for image content in VLM messages."""
+
+    type: str
+    image_url: ImageUrl
 
 
 @dataclass
@@ -43,7 +57,7 @@ class VLMEvaluator:
         """
         self.client = OpenAI(api_key=api_key)
 
-    def prepare_screenshots_for_vlm(self, screenshots: List[str]) -> List[Dict[str, Any]]:
+    def prepare_screenshots_for_vlm(self, screenshots: List[str]) -> List[dict]:
         """
         Prepare screenshots for VLM input.
 
@@ -120,7 +134,7 @@ class VLMEvaluator:
         Returns:
             Evaluation result with success determination and analysis
         """
-        content = []
+        content: List[dict] = []
 
         content.append(
             {

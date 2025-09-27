@@ -10,6 +10,9 @@ from typing import Any, Dict, Optional, List
 
 from .base_client import BaseCDPClient
 
+SnapshotLookup = Dict[int, Any]
+RawSnapshot = Dict[str, Any]
+
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +41,7 @@ class DOMUtil:
     async def capture_snapshot(
         self,
         session_id: Optional[str] = None,
-    ) -> Dict[int, Dict[str, Any]]:
+    ) -> SnapshotLookup:
         """
         Capture a DOM snapshot and return the enhanced optimized result.
 
@@ -49,7 +52,7 @@ class DOMUtil:
             Dictionary mapping snapshot index to enhanced node data
         """
         try:
-            params = {
+            params: Dict[str, Any] = {
                 "computedStyles": REQUIRED_COMPUTED_STYLES,
                 "includeEventListeners": True,
             }
@@ -72,7 +75,7 @@ class DOMUtil:
 
     async def capture_snapshot_from_all_pages(
         self,
-    ) -> Dict[str, Dict[int, Dict[str, Any]]]:
+    ) -> Dict[str, SnapshotLookup]:
         """
         Capture DOM snapshots from all attached page sessions.
 
@@ -88,37 +91,6 @@ class DOMUtil:
             )
             snapshots[target_id] = snapshot_data
         return snapshots
-
-    async def evaluate_expression(
-        self,
-        expression: str,
-        session_id: Optional[str] = None,
-    ) -> Any:
-        """
-        Evaluate a JavaScript expression in the browser context.
-
-        Args:
-            expression: JavaScript expression to evaluate
-            session_id: Optional session ID for targeted evaluation
-
-        Returns:
-            Result of the JavaScript evaluation
-        """
-        try:
-            fut = await self.client.send(
-                "Runtime.evaluate",
-                params={"expression": expression},
-                expect_result=True,
-                session_id=session_id,
-            )
-            assert fut is not None
-            msg = await fut  # type: ignore
-            result = msg.get("result", {}).get("result", {}).get("value")
-            logger.debug(f"Expression evaluated successfully: {expression}")
-            return result
-        except Exception as e:
-            logger.error(f"Failed to evaluate expression '{expression}': {e}")
-            return None
 
     def _parse_rare_boolean_data(self, rare_data: Dict[str, Any], index: int) -> Optional[bool]:
         """Parse rare boolean data from snapshot - returns True if index is in the rare data."""
@@ -138,8 +110,8 @@ class DOMUtil:
 
     def build_enhanced_snapshot_lookup(
         self,
-        snapshot: Dict[str, Any],
-    ) -> Dict[int, Dict[str, Any]]:
+        snapshot: RawSnapshot,
+    ) -> SnapshotLookup:
         """
         Build a lookup table of backend node ID to enhanced snapshot data.
 
@@ -149,7 +121,7 @@ class DOMUtil:
         Returns:
             Dictionary mapping snapshot index to enhanced node data
         """
-        snapshot_lookup: Dict[int, Dict[str, Any]] = {}
+        snapshot_lookup: SnapshotLookup = {}
 
         if not snapshot.get("documents"):
             return snapshot_lookup
@@ -301,7 +273,7 @@ class DOMUtil:
     async def capture_raw_snapshot(
         self,
         session_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> RawSnapshot:
         """
         Capture a raw DOM snapshot without enhancement processing.
 
@@ -312,7 +284,7 @@ class DOMUtil:
             Raw DOM snapshot data from CDP
         """
         try:
-            params = {
+            params: Dict[str, Any] = {
                 "computedStyles": REQUIRED_COMPUTED_STYLES,
                 "includeEventListeners": True,
             }

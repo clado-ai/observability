@@ -2,14 +2,14 @@ import aiohttp
 import asyncio
 import json
 import re
-from typing import Any, Dict, Optional, Literal
+from typing import Any, Dict, Optional, Literal, Union
 from dataclasses import dataclass
 import logging
 
-# Suppress aiohttp logging
 logging.getLogger("aiohttp").setLevel(logging.WARNING)
 
 TraceType = Literal["dom", "action", "eval", "final", "tool", "thought"]
+TraceResponse = Dict[str, Union[str, int]]
 
 
 @dataclass
@@ -207,7 +207,7 @@ class APIClient:
 
     async def create_trace(
         self, trace_type: TraceType, content: str, session_id: Optional[str] = None
-    ) -> Dict[str, Any]:
+    ) -> TraceResponse:
         """
         Create a trace entry.
 
