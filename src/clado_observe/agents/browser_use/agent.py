@@ -65,7 +65,7 @@ class Agent:
 
         self._setup_log_capture()
 
-        self.observer = CDPObserver(cdp_url=cdp_url, task=task)
+        self.observer = CDPObserver(cdp_url=cdp_url, task=task, api_client=self.api_client)
 
         self.browser_session = BrowserSession(
             cdp_url=cdp_url,
@@ -197,13 +197,6 @@ class Agent:
             except Exception as e:
                 print(f"[DEBUG] Queue processor error: {e}")
                 await asyncio.sleep(0.1)
-
-    async def _send_trace_async(self, trace_type, message):
-        """Async wrapper to send a trace."""
-        try:
-            await self.api_client.create_trace(trace_type, message)
-        except Exception as e:
-            print(f"[DEBUG] Failed to send trace: {e}")
 
     def _stop_trace_thread(self):
         """Stop the background trace thread and clean up properly."""

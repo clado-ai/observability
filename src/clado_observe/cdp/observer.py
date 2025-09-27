@@ -1,13 +1,15 @@
 import asyncio
 import os
 import threading
-from typing import Any, Dict, Optional, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .utils.base_client import BaseCDPClient
 from .utils.target_manager import TargetManager
 from .utils.screenshot import ScreenshotUtil
 from .utils.screencast import ScreencastUtil
 from .utils.dom import DOMUtil
+from .utils.network import NetworkUtil
+from ..utils.api_client import APIClient
 from ..utils.vlm_evaluator import VLMEvaluator, RunData, EvaluationResult
 
 SnapshotData = Dict[int, Any]
@@ -26,18 +28,21 @@ class CDPObserver:
         self,
         cdp_url: str,
         task: str,
+        api_client: Optional[APIClient] = None,
     ) -> None:
         if not cdp_url or not isinstance(cdp_url, str):
             raise ValueError("cdp_url must be a non-empty string")
 
         self.cdp_url = cdp_url
         self.task = task
+        self.api_client = api_client
 
         self.client = BaseCDPClient(cdp_url)
         self.target_manager = TargetManager(self.client)
         self.screenshot_util = ScreenshotUtil(self.client)
         self.screencast_util = ScreencastUtil(self.client)
         self.dom_util = DOMUtil(self.client)
+        self.network_util = NetworkUtil(self.client, capture_bodies=False)
 
         self._bg_thread: Optional[threading.Thread] = None
 
@@ -73,6 +78,8 @@ class CDPObserver:
                         )
 
         await self.target_manager.enable_domains_on_all_sessions()
+        for target_id, session_id in self.client.get_session_ids().items():
+            await self.network_util.enable_network_capture(session_id)
         self.client._event_handler = self._handle_event
 
     async def stop(self) -> None:
@@ -170,11 +177,44 @@ class CDPObserver:
     async def _handle_event(self, msg: CDPMessage) -> None:
         """
         Handle CDP events.
-        Manages screencast events to pass into handler
-        and target creation events to create new page and allow for inspection.
+        Manages screencast events to pass into handler,
+        network events for tracing, and target creation events to create new page and allow for inspection.
         """
         if isinstance(msg, dict):
             method = msg.get("method")
+
+            if method and method.startswith("Network."):
+                try:
+                    params = msg.get("params", {})
+                    if isinstance(params, dict):
+                        await self.network_util.handle_network_event(method, params)
+
+                        if method in [
+                            "Network.requestWillBeSent",
+                            "Network.responseReceived",
+                            "Network.loadingFinished",
+                            "Network.loadingFailed",
+                        ]:
+                            request_id = params.get("requestId")
+                            if request_id:
+                                all_events = self.network_util.get_all_events()
+                                for event in all_events:
+                                    if event.request_id == request_id:
+                                        log_entry = self.network_util.format_network_log(event)
+                                        self.add_log_entry(log_entry, "network")
+
+                                        if self.api_client and self.api_client.session_id:
+                                            try:
+                                                await self.api_client.create_trace(
+                                                    "network", log_entry
+                                                )
+                                            except Exception as api_e:
+                                                print(
+                                                    f"[DEBUG] Failed to send network trace to API: {api_e}"
+                                                )
+                                        break
+                except Exception as e:
+                    print(f"[DEBUG] Error handling network event: {e}")
 
             if method == "Page.screencastFrame":
                 try:
@@ -197,6 +237,8 @@ class CDPObserver:
                             session_id = self.client.get_session_ids()[target_id]
                             await self.target_manager.enable_domains_on_all_sessions()
 
+                            await self.network_util.enable_network_capture(session_id)
+
                             if (
                                 self.screencast_util._screencast_recording
                                 and self.screencast_util._screencast_params
@@ -214,7 +256,7 @@ class CDPObserver:
 
         Args:
             log_entry: The log message to collect
-            log_type: Type of log (e.g., 'action', 'eval', 'tool', 'thought', 'final')
+            log_type: Type of log (e.g., 'action', 'eval', 'tool', 'thought', 'final', 'network')
         """
         if not log_entry:
             return

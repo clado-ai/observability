@@ -8,7 +8,7 @@ import logging
 
 logging.getLogger("aiohttp").setLevel(logging.WARNING)
 
-TraceType = Literal["dom", "action", "eval", "final", "tool", "thought"]
+TraceType = Literal["dom", "action", "eval", "final", "tool", "thought", "network"]
 TraceResponse = Dict[str, Union[str, int]]
 
 
