@@ -109,18 +109,22 @@ class BrowserUseAgent:
                             if self.agent.api_client and self.agent.api_client.session_id:
                                 if record.name == "BrowserSession":
                                     trace_type = "tool"
-                                    is_tool_call = True
+                                    need_browser_data = True
                                 else:
                                     trace_type = self.agent.api_client.detect_trace_type(
                                         record.name, msg
                                     )
-                                    is_tool_call = trace_type == "tool"
+                                    need_browser_data = (
+                                        trace_type == "tool" or trace_type == "final"
+                                    )
                                 try:
                                     asyncio.get_running_loop()
                                 except RuntimeError:
                                     pass
 
-                                self.agent._trace_queue.put((trace_type, clean_msg, is_tool_call))
+                                self.agent._trace_queue.put(
+                                    (trace_type, clean_msg, need_browser_data)
+                                )
 
                 except Exception as e:
                     print(f"[DEBUG CAPTURE ERROR] {e}")
@@ -147,10 +151,10 @@ class BrowserUseAgent:
         while True:
             try:
                 if not self._trace_queue.empty():
-                    trace_type, content, is_tool_call = self._trace_queue.get()
+                    trace_type, content, need_browser_data = self._trace_queue.get()
 
                     try:
-                        if is_tool_call:
+                        if need_browser_data:
                             dom_data = None
 
                             try:
