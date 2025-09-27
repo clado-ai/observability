@@ -55,6 +55,14 @@ class CDPObserver:
             await asyncio.sleep(2.0)
             await self.target_manager.attach_to_all_page_targets()
             session_count = len(self.client.get_session_ids())
+            if session_count > 0 and self.screencast_util._screencast_recording:
+                for target_id, session_id in self.client.get_session_ids().items():
+                    if self.screencast_util._screencast_params:
+                        await self.client.send(
+                            "Page.startScreencast",
+                            params=self.screencast_util._screencast_params,
+                            session_id=session_id,
+                        )
 
         await self.target_manager.enable_domains_on_all_sessions()
         self.client._event_handler = self._handle_event
@@ -139,9 +147,13 @@ class CDPObserver:
         """Start screencast recording."""
         await self.screencast_util.start_screencast()
 
-    async def end_screencast(self) -> None:
-        """Stop screencast recording and create video."""
-        await self.screencast_util.end_screencast()
+    async def end_screencast(self) -> Optional[str]:
+        """Stop screencast recording and create video.
+
+        Returns:
+            Path to the created video file, or None if no video was created
+        """
+        return await self.screencast_util.end_screencast()
 
     async def _handle_event(self, msg: Dict[str, Any]) -> None:
         """
@@ -156,7 +168,7 @@ class CDPObserver:
                 try:
                     frame_data = msg.get("params", {})
                     session_id = msg.get("sessionId")
-                    self.screencast_util.handle_screencast_frame(frame_data, session_id)
+                    await self.screencast_util.handle_screencast_frame(frame_data, session_id)
                 except Exception as e:
                     print(f"[DEBUG] Error handling screencast frame: {e}")
 
@@ -169,5 +181,15 @@ class CDPObserver:
                         if target_id in self.client.get_session_ids():
                             session_id = self.client.get_session_ids()[target_id]
                             await self.target_manager.enable_domains_on_all_sessions()
+
+                            if (
+                                self.screencast_util._screencast_recording
+                                and self.screencast_util._screencast_params
+                            ):
+                                await self.client.send(
+                                    "Page.startScreencast",
+                                    params=self.screencast_util._screencast_params,
+                                    session_id=session_id,
+                                )
                 except Exception as e:
                     print(f"[DEBUG] Error handling target creation: {e}")

@@ -30,6 +30,7 @@ class ScreencastUtil:
         self._screencast_frames: List[Dict[str, Any]] = []
         self._screencast_recording = False
         self._temp_dir: Optional[str] = None
+        self._screencast_params: Dict[str, Any] = {}
 
     async def start_screencast(self) -> None:
         """Start screencast recording."""
@@ -44,25 +45,35 @@ class ScreencastUtil:
 
             screencast_params = {
                 "format": "png",
-                "quality": 60,
+                "quality": 90,
                 "everyNthFrame": 1,
             }
 
             if viewport_size:
                 screencast_params.update(
                     {
-                        "maxWidth": viewport_size["width"],
-                        "maxHeight": viewport_size["height"],
+                        "maxWidth": min(viewport_size["width"], 1920),
+                        "maxHeight": min(viewport_size["height"], 1080),
                     }
                 )
+            self._screencast_params = screencast_params
 
-            for target_id, session_id in self.client.get_session_ids().items():
-                await self.client.send(
-                    "Page.startScreencast",
-                    params=screencast_params,
-                    session_id=session_id,
+            sessions = self.client.get_session_ids()
+
+            if not sessions:
+                logger.warning(
+                    "No sessions available yet. Screencast will start when a page is created."
                 )
-                logger.debug(f"Screencast started on session {session_id}")
+            else:
+                for target_id, session_id in sessions.items():
+                    await self.client.send(
+                        "Page.startScreencast",
+                        params=screencast_params,
+                        session_id=session_id,
+                    )
+                    logger.debug(
+                        f"Screencast started on session {session_id} with params: {screencast_params}"
+                    )
         except Exception as e:
             logger.error(f"Failed to start screencast: {e}")
 
@@ -73,6 +84,7 @@ class ScreencastUtil:
             Path to the created video file, or None if no video was created
         """
         try:
+            await asyncio.sleep(0.5)
             for target_id, session_id in self.client.get_session_ids().items():
                 await self.client.send(
                     "Page.stopScreencast",
@@ -131,7 +143,7 @@ class ScreencastUtil:
         except Exception as e:
             logger.debug(f"Failed to acknowledge screencast frame: {e}")
 
-    def handle_screencast_frame(
+    async def handle_screencast_frame(
         self, frame_data: Dict[str, Any], session_id: Optional[str]
     ) -> None:
         """Handle incoming screencast frame data."""
@@ -139,19 +151,21 @@ class ScreencastUtil:
             return
 
         try:
+            metadata = frame_data.get("metadata", {})
+            cdp_timestamp = metadata.get("timestamp", time.time())
+
             self._screencast_frames.append(
                 {
                     "data": frame_data.get("data", ""),
-                    "timestamp": time.time(),
-                    "metadata": frame_data.get("metadata", {}),
+                    "timestamp": cdp_timestamp,
+                    "metadata": metadata,
                     "sessionId": session_id,
                 }
             )
-            logger.debug(f"Captured screencast frame {len(self._screencast_frames)}")
 
-            asyncio.create_task(
-                self._ack_screencast_frame(frame_data.get("sessionId", ""), session_id)
-            )
+            frame_session_id = frame_data.get("sessionId", "")
+            if frame_session_id and session_id:
+                await self._ack_screencast_frame(frame_session_id, session_id)
 
         except Exception as e:
             logger.debug(f"Error capturing screencast frame: {e}")
@@ -177,17 +191,28 @@ class ScreencastUtil:
             frames_dir = os.path.join(self._temp_dir, f"frames_{timestamp}")
             os.makedirs(frames_dir, exist_ok=True)
 
-            for i, frame_data in enumerate(self._screencast_frames):
-                frame_path = os.path.join(frames_dir, f"frame_{i:06d}.png")
+            sorted_frames = sorted(self._screencast_frames, key=lambda x: x.get("timestamp", 0))
+
+            frame_files = []
+            timestamps = []
+            for i, frame_data in enumerate(sorted_frames):
+                ext = "png"
+                frame_path = os.path.join(frames_dir, f"frame_{i:06d}.{ext}")
                 try:
                     image_data = base64.b64decode(frame_data.get("data", ""))
                     with open(frame_path, "wb") as f:
                         f.write(image_data)
+                    frame_files.append(frame_path)
+                    timestamps.append(frame_data.get("timestamp", 0))
                 except Exception as e:
                     logger.debug(f"Failed to save frame {i}: {e}")
                     continue
 
-            success = await self._create_video_with_ffmpeg(frames_dir, video_path)
+            if not frame_files:
+                logger.error("No frames were successfully saved")
+                return None
+
+            success = await self._create_video_with_ffmpeg(frame_files, timestamps, video_path)
 
             if success:
                 logger.debug(f"Video created: {video_path}")
@@ -199,8 +224,15 @@ class ScreencastUtil:
             logger.error(f"Failed to create video from frames: {e}")
             return None
 
-    async def _create_video_with_ffmpeg(self, frames_dir: str, output_path: str) -> bool:
-        """Create video using ffmpeg from frame images.
+    async def _create_video_with_ffmpeg(
+        self, frame_files: List[str], timestamps: List[float], output_path: str
+    ) -> bool:
+        """Create video using ffmpeg from frame images with timestamp-based durations.
+
+        Args:
+            frame_files: List of paths to frame image files
+            timestamps: List of timestamps for each frame
+            output_path: Path where the video should be saved
 
         Returns:
             True if video was created successfully, False otherwise
@@ -211,13 +243,51 @@ class ScreencastUtil:
                 logger.debug("ffmpeg not available, skipping video creation")
                 return False
 
+            if not frame_files:
+                logger.debug("No frame files provided")
+                return False
+
+            concat_file = os.path.join(os.path.dirname(frame_files[0]), "concat.txt")
+            with open(concat_file, "w") as f:
+                for i, frame_path in enumerate(frame_files):
+                    if i < len(frame_files) - 1:
+                        duration = timestamps[i + 1] - timestamps[i]
+                    else:
+                        if len(timestamps) > 1:
+                            avg_duration = (timestamps[-1] - timestamps[0]) / (len(timestamps) - 1)
+                            duration = min(avg_duration, 0.5)
+                        else:
+                            duration = 0.1
+
+                    duration = max(duration, 0.03)
+
+                    f.write(f"file '{frame_path}'\n")
+                    f.write(f"duration {duration:.3f}\n")
+
+                if frame_files:
+                    f.write(f"file '{frame_files[-1]}'\n")
+
+            if len(timestamps) > 1:
+                total_duration = timestamps[-1] - timestamps[0]
+                if len(frame_files) > 1:
+                    avg_duration = (timestamps[-1] - timestamps[0]) / (len(timestamps) - 1)
+                    total_duration += avg_duration
+            else:
+                total_duration = 0.1
+
+            logger.info(
+                f"Creating video with {len(frame_files)} frames, duration: {total_duration:.2f}s"
+            )
+
             cmd = [
                 "ffmpeg",
                 "-y",
-                "-framerate",
-                "15",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
                 "-i",
-                os.path.join(frames_dir, "frame_%06d.png"),
+                concat_file,
                 "-c:v",
                 "libx264",
                 "-preset",
@@ -226,21 +296,29 @@ class ScreencastUtil:
                 "23",
                 "-pix_fmt",
                 "yuv420p",
+                "-vf",
+                "pad=ceil(iw/2)*2:ceil(ih/2)*2",  # Ensure dimensions are even
                 "-movflags",
                 "+faststart",
                 output_path,
             ]
 
             result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode == 0:
-                logger.debug(f"Video created successfully: {output_path}")
-                return True
+
+            if result.returncode == 0 and os.path.exists(output_path):
+                file_size = os.path.getsize(output_path)
+                if file_size > 0:
+                    return True
+                else:
+                    logger.error("Video file created but is empty")
+                    return False
             else:
-                logger.debug(f"ffmpeg error: {result.stderr}")
+                logger.error(f"ffmpeg failed with return code {result.returncode}")
+                logger.error(f"ffmpeg stderr: {result.stderr}")
                 return False
 
         except Exception as e:
-            logger.debug(f"Error creating video with ffmpeg: {e}")
+            logger.error(f"Error creating video with ffmpeg: {e}")
             return False
 
     def cleanup_temp_files(self) -> None:

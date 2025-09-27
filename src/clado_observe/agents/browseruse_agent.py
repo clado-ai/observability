@@ -1,5 +1,7 @@
 import asyncio
+import base64
 import logging
+import os
 import time
 import re
 import threading
@@ -91,7 +93,11 @@ class BrowserUseAgent:
                 try:
                     msg = self.format(record)
 
-                    if record.name and (record.name in ["Agent", "tools"]):
+                    if (
+                        record.levelno == logging.INFO
+                        and record.name
+                        and record.name in ["Agent", "tools", "BrowserSession", "service"]
+                    ):
                         clean_msg = re.sub(r"^(INFO|WARNING|ERROR|DEBUG)\s+\[[\w.]+\]\s*", "", msg)
                         clean_msg = re.sub(r"\x1b\[[0-9;]*m", "", clean_msg)
                         clean_msg = clean_msg.strip()
@@ -101,10 +107,14 @@ class BrowserUseAgent:
                                 return
 
                             if self.agent.api_client and self.agent.api_client.session_id:
-                                trace_type = self.agent.api_client.detect_trace_type(
-                                    record.name, msg
-                                )
-                                is_tool_call = trace_type == "tool"
+                                if record.name == "BrowserSession":
+                                    trace_type = "tool"
+                                    is_tool_call = True
+                                else:
+                                    trace_type = self.agent.api_client.detect_trace_type(
+                                        record.name, msg
+                                    )
+                                    is_tool_call = trace_type == "tool"
                                 try:
                                     asyncio.get_running_loop()
                                 except RuntimeError:
@@ -235,6 +245,7 @@ class BrowserUseAgent:
                 print(f"[API] Failed to create session: {e}")
 
             self.observer.start_background()
+            time.sleep(1.0)
 
             try:
                 loop.run_until_complete(self.observer.start_screencast())
@@ -245,7 +256,27 @@ class BrowserUseAgent:
                 print(f"[DEBUG] Error during agent execution: {e}")
             finally:
                 try:
-                    loop.run_until_complete(self.observer.end_screencast())
+                    video_path = loop.run_until_complete(self.observer.end_screencast())
+                    if video_path and os.path.exists(video_path):
+                        try:
+                            with open(video_path, "rb") as video_file:
+                                video_data = video_file.read()
+                                video_base64 = base64.b64encode(video_data).decode("utf-8")
+                                video_data_uri = f"data:video/mp4;base64,{video_base64}"
+
+                            loop.run_until_complete(
+                                self.api_client.upload_media(
+                                    media_type="video", data=video_data_uri
+                                )
+                            )
+
+                            try:
+                                self.observer.screencast_util.cleanup_temp_files()
+                            except Exception as e:
+                                print(f"[DEBUG] Failed to cleanup temp files: {e}")
+
+                        except Exception as e:
+                            print(f"[DEBUG] Failed to upload video: {e}")
                 except Exception as e:
                     print(f"[DEBUG] Failed to end screencast: {e}")
 
@@ -264,7 +295,6 @@ class BrowserUseAgent:
                     pass
 
                 if hasattr(self, "_log_handler"):
-                    logging.getLogger().removeHandler(self._log_handler)
                     logging.getLogger("browser_use").removeHandler(self._log_handler)
 
         finally:
