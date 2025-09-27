@@ -1,12 +1,17 @@
 import asyncio
 import logging
 import time
+import re
+import threading
+from queue import Queue
+from typing import Optional, Tuple
 
 from browser_use.agent.service import Agent
 from browser_use.browser.session import BrowserSession
 from browser_use.llm import BaseChatModel
 
 from ..cdp.observer import CDPObserver
+from .api_client import APIClient
 
 
 class BrowserUseAgent:
@@ -21,6 +26,7 @@ class BrowserUseAgent:
         task: str,
         llm: BaseChatModel,
         cdp_url: str,
+        api_key: str,
         **agent_kwargs,
     ) -> None:
         """
@@ -30,6 +36,7 @@ class BrowserUseAgent:
             task: The task description for the browser-use agent
             llm: The language model to use for the agent
             cdp_url: The CDP WebSocket URL to connect to
+            api_key: API key for the observability API (localhost:3000)
             **agent_kwargs: Additional arguments passed to the browser-use Agent
         """
         if not task or not isinstance(task, str):
@@ -38,8 +45,21 @@ class BrowserUseAgent:
             raise ValueError("cdp_url must be a non-empty string")
         if not llm or not isinstance(llm, BaseChatModel):
             raise ValueError("llm must be a non-empty BrowserUse BaseChatModel")
+        if not api_key or not isinstance(api_key, str):
+            raise ValueError("api_key must be a non-empty string")
 
+        self.task = task
         self.cdp_url = cdp_url
+        self.api_key = api_key
+        self.agent_kwargs = agent_kwargs
+
+        self.api_client = APIClient(api_key=api_key)
+
+        self.model_name = str(llm.model) if hasattr(llm, "model") else "unknown"
+
+        self._trace_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._trace_thread: Optional[threading.Thread] = None
+        self._trace_queue: Queue[Tuple[str, str]] = Queue()  # Queue to maintain trace order
 
         self._setup_log_capture()
 
@@ -72,7 +92,23 @@ class BrowserUseAgent:
                     msg = self.format(record)
 
                     if record.name and (record.name in ["Agent", "tools"]):
-                        print(msg)
+                        clean_msg = re.sub(r"^(INFO|WARNING|ERROR|DEBUG)\s+\[[\w.]+\]\s*", "", msg)
+                        clean_msg = re.sub(r"\x1b\[[0-9;]*m", "", clean_msg)
+                        clean_msg = clean_msg.strip()
+
+                        if clean_msg and not clean_msg.isspace():
+                            if len(clean_msg) > 2000:
+                                return
+
+                            if self.agent.api_client and self.agent.api_client.session_id:
+                                trace_type = self.agent.api_client.detect_trace_type(
+                                    record.name, msg
+                                )
+                                try:
+                                    asyncio.get_running_loop()
+                                except RuntimeError:
+                                    pass
+                                self.agent._trace_queue.put((trace_type, clean_msg))
 
                 except Exception as e:
                     print(f"[DEBUG CAPTURE ERROR] {e}")
@@ -81,59 +117,124 @@ class BrowserUseAgent:
         browser_use_logger = logging.getLogger("browser_use")
         browser_use_logger.addHandler(self._log_handler)
 
-    def _start_screencast_sync(self) -> None:
-        """Start screencast synchronously."""
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(self.observer.start_screencast())
-            else:
-                loop.run_until_complete(self.observer.start_screencast())
-        except Exception as e:
-            print(f"[DEBUG] Failed to start screencast synchronously: {e}")
+    def _start_trace_thread(self):
+        """Start a background thread with its own event loop for sending traces."""
 
-    def _end_screencast_sync(self) -> None:
-        """End screencast synchronously."""
+        def run_trace_loop():
+            self._trace_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._trace_loop)
+            self._trace_loop.create_task(self._process_trace_queue())
+            self._trace_loop.run_forever()
+
+        self._trace_thread = threading.Thread(target=run_trace_loop, daemon=True)
+        self._trace_thread.start()
+        time.sleep(0.1)
+
+    async def _process_trace_queue(self):
+        """Process traces from the queue in order."""
+        while True:
+            try:
+                if not self._trace_queue.empty():
+                    trace_type, content = self._trace_queue.get()
+                    try:
+                        await self.api_client.create_trace(trace_type, content)
+                    except Exception as e:
+                        print(f"[DEBUG] Failed to send trace: {e}")
+                else:
+                    await asyncio.sleep(0.1)
+            except Exception as e:
+                print(f"[DEBUG] Queue processor error: {e}")
+                await asyncio.sleep(0.1)
+
+    async def _send_trace_async(self, trace_type, message):
+        """Async wrapper to send a trace."""
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(self.observer.end_screencast())
-            else:
-                loop.run_until_complete(self.observer.end_screencast())
+            await self.api_client.create_trace(trace_type, message)
         except Exception as e:
-            print(f"[DEBUG] Failed to end screencast synchronously: {e}")
+            print(f"[DEBUG] Failed to send trace: {e}")
+
+    def _stop_trace_thread(self):
+        """Stop the background trace thread and clean up properly."""
+        if self._trace_loop and self._trace_loop.is_running():
+
+            async def cleanup_and_stop():
+                for _ in range(20):
+                    if self._trace_queue.empty():
+                        break
+                    await asyncio.sleep(0.1)
+
+                tasks = [
+                    t for t in asyncio.all_tasks(self._trace_loop) if t != asyncio.current_task()
+                ]
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                await self.api_client.close()
+                self._trace_loop.stop()
+
+            asyncio.run_coroutine_threadsafe(cleanup_and_stop(), self._trace_loop)
+
+        if self._trace_thread:
+            self._trace_thread.join(timeout=3)
 
     def run_sync(self) -> None:
         """
         Run the agent synchronously with CDP observation.
         Starts the observer in the background, runs the agent, then stops the observer.
         """
-        self.observer.start_background()
+        self._start_trace_thread()
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self._sync_loop = loop
 
         try:
-            self._start_screencast_sync()
-            self.agent.run_sync()
+            try:
+                loop.run_until_complete(
+                    self.api_client.create_session(
+                        prompt=self.task,
+                        model=self.model_name,
+                        param={"cdp_url": self.cdp_url, "agent_kwargs": self.agent_kwargs},
+                    )
+                )
+            except Exception as e:
+                print(f"[API] Failed to create session: {e}")
 
-        except Exception as e:
-            print(f"[DEBUG] Error during agent execution: {e}")
+            self.observer.start_background()
+
+            try:
+                loop.run_until_complete(self.observer.start_screencast())
+
+                self.agent.run_sync()
+
+            except Exception as e:
+                print(f"[DEBUG] Error during agent execution: {e}")
+            finally:
+                try:
+                    loop.run_until_complete(self.observer.end_screencast())
+                except Exception as e:
+                    print(f"[DEBUG] Failed to end screencast: {e}")
+
+                time.sleep(1.0)
+                self.observer.stop_background()
+                if self.api_client.session_id:
+                    try:
+                        loop.run_until_complete(self.api_client.end_session())
+                    except Exception as e:
+                        print(f"[API] Failed to end session: {e}")
+
+                time.sleep(0.5)
+                try:
+                    loop.run_until_complete(self.api_client.close())
+                except Exception:
+                    pass
+
+                if hasattr(self, "_log_handler"):
+                    logging.getLogger().removeHandler(self._log_handler)
+                    logging.getLogger("browser_use").removeHandler(self._log_handler)
+
         finally:
-            self._end_screencast_sync()
-            time.sleep(1.0)
-            self.observer.stop_background()
-            if hasattr(self, "_log_handler"):
-                logging.getLogger().removeHandler(self._log_handler)
-                logging.getLogger("browser_use").removeHandler(self._log_handler)
+            self._stop_trace_thread()
 
-    async def run_async(self) -> None:
-        """
-        Run the agent asynchronously with CDP observation.
-        Starts the observer, runs the agent, then stops the observer.
-        """
-        await self.observer.start()
-
-        try:
-            await self.observer.start_screencast()
-            await self.agent.run_async()
-        finally:
-            await self.observer.end_screencast()
-            await self.observer.stop()
+            loop.close()
+            if hasattr(self, "_sync_loop"):
+                delattr(self, "_sync_loop")
