@@ -405,6 +405,7 @@ name = "clado-observe"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "anthropic" },
     { name = "browser-use" },
     { name = "python-dotenv" },
@@ -423,6 +424,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "anthropic", specifier = ">=0.38.0" },
     { name = "browser-use", specifier = ">=0.1.37" },
     { name = "python-dotenv", specifier = ">=1.0.1" },

@@ -59,7 +59,7 @@ class BrowserUseAgent:
 
         self._trace_loop: Optional[asyncio.AbstractEventLoop] = None
         self._trace_thread: Optional[threading.Thread] = None
-        self._trace_queue: Queue[Tuple[str, str]] = Queue()  # Queue to maintain trace order
+        self._trace_queue: Queue[Tuple[str, str, bool]] = Queue()
 
         self._setup_log_capture()
 
@@ -104,11 +104,13 @@ class BrowserUseAgent:
                                 trace_type = self.agent.api_client.detect_trace_type(
                                     record.name, msg
                                 )
+                                is_tool_call = trace_type == "tool"
                                 try:
                                     asyncio.get_running_loop()
                                 except RuntimeError:
                                     pass
-                                self.agent._trace_queue.put((trace_type, clean_msg))
+
+                                self.agent._trace_queue.put((trace_type, clean_msg, is_tool_call))
 
                 except Exception as e:
                     print(f"[DEBUG CAPTURE ERROR] {e}")
@@ -135,11 +137,44 @@ class BrowserUseAgent:
         while True:
             try:
                 if not self._trace_queue.empty():
-                    trace_type, content = self._trace_queue.get()
+                    trace_type, content, is_tool_call = self._trace_queue.get()
+
                     try:
-                        await self.api_client.create_trace(trace_type, content)
+                        if is_tool_call:
+                            dom_data = None
+
+                            try:
+                                screenshot_future = asyncio.run_coroutine_threadsafe(
+                                    self.observer.screenshot(), self.observer.client._loop
+                                )
+                                screenshot = screenshot_future.result(timeout=5.0)
+
+                                if screenshot:
+                                    await self.api_client.upload_media(
+                                        media_type="image", data=screenshot
+                                    )
+
+                                dom_future = asyncio.run_coroutine_threadsafe(
+                                    self.observer.snapshot(), self.observer.client._loop
+                                )
+                                dom_data = dom_future.result(timeout=5.0)
+
+                                await self.api_client.create_trace("dom", content=str(dom_data))
+                                await self.api_client.create_trace("tool", content=content)
+
+                            except Exception as e:
+                                print(f"[DEBUG] Failed to capture screenshot/DOM: {e}")
+                                import traceback
+
+                                traceback.print_exc()
+                        else:
+                            await self.api_client.create_trace(trace_type, content)
+
                     except Exception as e:
                         print(f"[DEBUG] Failed to send trace: {e}")
+                        import traceback
+
+                        traceback.print_exc()
                 else:
                     await asyncio.sleep(0.1)
             except Exception as e:

@@ -96,7 +96,13 @@ class CDPObserver:
     async def snapshot(self) -> Dict[int, Dict[str, Any]]:
         """Capture a DOM snapshot and return the enhanced result with ALL elements."""
         try:
-            result = await self.dom_util.capture_snapshot()
+            session_ids = self.client.get_session_ids()
+            if not session_ids:
+                print("[ERROR] No page sessions available for DOM snapshot")
+                return {}
+
+            session_id = next(iter(session_ids.values()))
+            result = await self.dom_util.capture_snapshot(session_id=session_id)
             return result
         except Exception as e:
             print(f"[ERROR] Failed to capture snapshot: {e}")
@@ -105,7 +111,13 @@ class CDPObserver:
     async def screenshot(self) -> Optional[str]:
         """Capture a screenshot and return the base64 encoded image data."""
         try:
-            screenshot_data = await self.screenshot_util.capture_screenshot()
+            session_ids = self.client.get_session_ids()
+            if not session_ids:
+                print("[ERROR] No page sessions available for screenshot")
+                return None
+
+            session_id = next(iter(session_ids.values()))
+            screenshot_data = await self.screenshot_util.capture_screenshot(session_id=session_id)
             return screenshot_data
         except Exception as e:
             print(f"[ERROR] Failed to capture screenshot: {e}")

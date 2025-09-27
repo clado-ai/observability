@@ -165,6 +165,46 @@ class APIClient:
                 error = await response.text()
                 raise Exception(f"Failed to end session: {response.status} - {error}")
 
+    async def upload_media(
+        self, media_type: Literal["image", "video"], data: str, session_id: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        Upload media (screenshot or video) to the API.
+
+        Args:
+            media_type: Type of media ("image" or "video")
+            data: Data URI formatted media data (e.g., data:image/png;base64,...)
+            session_id: The session ID (uses current session if not provided)
+
+        Returns:
+            URL of the uploaded media or None if failed
+        """
+        sid = session_id or self.session_id
+        if not sid:
+            raise ValueError("No session ID provided or set")
+
+        url = f"{self.base_url}/session/{sid}/trace/media"
+
+        form = aiohttp.FormData()
+        form.add_field("type", media_type)
+        form.add_field("data", data)
+
+        try:
+            client = await self._get_session()
+            async with client.post(
+                url, headers={"Authorization": f"Bearer {self.api_key}"}, data=form
+            ) as response:
+                if response.status == 200:
+                    media_url = await response.json()
+                    return media_url
+                else:
+                    error = await response.text()
+                    print(f"[API] Failed to upload media: {response.status} - {error}")
+                    return None
+        except Exception as e:
+            print(f"[API] Error uploading media: {e}")
+            return None
+
     async def create_trace(
         self, trace_type: TraceType, content: str, session_id: Optional[str] = None
     ) -> Dict[str, Any]:
