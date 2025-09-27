@@ -44,6 +44,18 @@ class CDPObserver:
 
         await self.client.connect()
         await self.target_manager.attach_to_all_page_targets()
+
+        session_count = len(self.client.get_session_ids())
+        if session_count == 0:
+            await self.client.send("Target.setDiscoverTargets", params={"discover": True})
+            await self.client.send(
+                "Target.createTarget", params={"url": "https://www.google.com"}, expect_result=False
+            )
+
+            await asyncio.sleep(2.0)
+            await self.target_manager.attach_to_all_page_targets()
+            session_count = len(self.client.get_session_ids())
+
         await self.target_manager.enable_domains_on_all_sessions()
         self.client._event_handler = self._handle_event
 
