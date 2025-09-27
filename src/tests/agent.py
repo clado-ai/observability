@@ -17,7 +17,7 @@ def main() -> None:
         task="Find the number of stars of the browser-use repo",
         llm=ChatAnthropic(model="claude-sonnet-4-0"),
         cdp_url=cdp_url,
-        api_key="cl-2a8bbe617b3257c7",
+        api_key=os.getenv("CLADO_API_KEY", ""),
     )
 
     agent.run_sync()
