@@ -3,12 +3,12 @@ import os
 import threading
 from typing import Any, Dict, Optional, List, Tuple
 
-from .util.base_client import BaseCDPClient
-from .util.target_manager import TargetManager
-from .util.screenshot import ScreenshotUtil
-from .util.screencast import ScreencastUtil
-from .util.dom import DOMUtil
-from ..agents.vlm_evaluator import VLMEvaluator, RunData, EvaluationResult
+from .utils.base_client import BaseCDPClient
+from .utils.target_manager import TargetManager
+from .utils.screenshot import ScreenshotUtil
+from .utils.screencast import ScreencastUtil
+from .utils.dom import DOMUtil
+from ..utils.vlm_evaluator import VLMEvaluator, RunData, EvaluationResult
 
 
 JsonDict = Dict[str, Any]

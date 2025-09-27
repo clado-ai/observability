@@ -1,7 +1,7 @@
 from .cdp.observer import CDPObserver
-from .agents.browseruse_agent import BrowserUseAgent
+from .agents.browser_use.agent import Agent
 
 __all__ = [
     "CDPObserver",
-    "BrowserUseAgent",
+    "Agent",
 ]

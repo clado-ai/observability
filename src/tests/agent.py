@@ -3,7 +3,7 @@ import os
 from browser_use.llm import ChatAnthropic
 from dotenv import load_dotenv
 
-from clado_observe import BrowserUseAgent
+from clado_observe.agents.browser_use import Agent
 
 load_dotenv()
 
@@ -13,7 +13,7 @@ def main() -> None:
     if not cdp_url:
         raise RuntimeError("WEBSOCKET_DEBUGGER_URL not set in environment")
 
-    agent = BrowserUseAgent(
+    agent = Agent(
         task="Find the number of stars of the browser-use repo",
         llm=ChatAnthropic(model="claude-sonnet-4-0"),
         cdp_url=cdp_url,

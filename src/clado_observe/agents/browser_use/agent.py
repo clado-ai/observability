@@ -8,15 +8,15 @@ import threading
 from queue import Queue
 from typing import Optional, Tuple
 
-from browser_use.agent.service import Agent
+from browser_use.agent.service import Agent as BrowserUseAgent
 from browser_use.browser.session import BrowserSession
 from browser_use.llm import BaseChatModel
 
-from ..cdp.observer import CDPObserver
-from .api_client import APIClient
+from ...cdp.observer import CDPObserver
+from ...utils.api_client import APIClient
 
 
-class BrowserUseAgent:
+class Agent:
     """
     An agent wrapper that combines browser-use's Agent with CDP observation capabilities.
     This allows you to run browser automation tasks while simultaneously observing
@@ -73,7 +73,7 @@ class BrowserUseAgent:
             is_local=False,
         )
 
-        self.agent = Agent(
+        self.agent = BrowserUseAgent(
             task=task,
             llm=llm,
             browser=self.browser_session,
