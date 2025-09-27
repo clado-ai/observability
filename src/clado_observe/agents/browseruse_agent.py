@@ -3,6 +3,7 @@ import logging
 import time
 
 from browser_use.agent.service import Agent
+from browser_use.browser.session import BrowserSession
 from browser_use.llm import BaseChatModel
 
 from ..cdp.observer import CDPObserver
@@ -44,60 +45,41 @@ class BrowserUseAgent:
 
         self.observer = CDPObserver(cdp_url=cdp_url)
 
+        self.browser_session = BrowserSession(
+            cdp_url=cdp_url,
+            headless=False,
+            is_local=False,
+        )
+
         self.agent = Agent(
             task=task,
             llm=llm,
-            cdp_url=cdp_url,
+            browser=self.browser_session,
             **agent_kwargs,
         )
 
     def _setup_log_capture(self) -> None:
-        """Setup log capture for browser-use agent logs."""
+        """Setup log capture for browser-use agent logs using Python logging handlers."""
 
         class LogCaptureHandler(logging.Handler):
             def __init__(self, agent_instance):
                 super().__init__()
                 self.agent = agent_instance
+                self.setFormatter(logging.Formatter("%(levelname)-8s [%(name)s] %(message)s"))
 
             def emit(self, record):
-                log_message = self.format(record)
-                print(f"[DEBUG] Log message: {log_message}")
+                try:
+                    msg = self.format(record)
 
-                if hasattr(self.agent, "_capture_step_data"):
-                    try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            asyncio.create_task(self.agent._capture_step_data())
-                        else:
-                            loop.run_until_complete(self.agent._capture_step_data())
-                    except Exception as e:
-                        print(f"[DEBUG] Error capturing step data: {e}")
+                    if record.name and (record.name in ["Agent", "tools"]):
+                        print(msg)
 
-        agent_logger = logging.getLogger("Agent")
-        agent_logger.addHandler(LogCaptureHandler(self))
-        agent_logger.setLevel(logging.INFO)
+                except Exception as e:
+                    print(f"[DEBUG CAPTURE ERROR] {e}")
 
-        tools_logger = logging.getLogger("tools")
-        tools_logger.addHandler(LogCaptureHandler(self))
-        tools_logger.setLevel(logging.INFO)
-
-        service_logger = logging.getLogger("service")
-        service_logger.addHandler(LogCaptureHandler(self))
-        service_logger.setLevel(logging.INFO)
-
-        browsersession_logger = logging.getLogger("BrowserSession")
-        browsersession_logger.addHandler(LogCaptureHandler(self))
-        browsersession_logger.setLevel(logging.INFO)
-
-    async def _capture_step_data(self) -> None:
-        """Capture snapshot and screenshot data for the current step."""
-        try:
-            await self.observer.snapshot()
-            await self.observer.screenshot()
-
-            print("[DEBUG] Captured step data")
-        except Exception as e:
-            print(f"[DEBUG] Failed to capture step data: {e}")
+        self._log_handler = LogCaptureHandler(self)
+        browser_use_logger = logging.getLogger("browser_use")
+        browser_use_logger.addHandler(self._log_handler)
 
     def _start_screencast_sync(self) -> None:
         """Start screencast synchronously."""
@@ -131,10 +113,16 @@ class BrowserUseAgent:
         try:
             self._start_screencast_sync()
             self.agent.run_sync()
+
+        except Exception as e:
+            print(f"[DEBUG] Error during agent execution: {e}")
         finally:
             self._end_screencast_sync()
             time.sleep(1.0)
             self.observer.stop_background()
+            if hasattr(self, "_log_handler"):
+                logging.getLogger().removeHandler(self._log_handler)
+                logging.getLogger("browser_use").removeHandler(self._log_handler)
 
     async def run_async(self) -> None:
         """
