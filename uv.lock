@@ -408,6 +408,7 @@ dependencies = [
     { name = "aiohttp" },
     { name = "anthropic" },
     { name = "browser-use" },
+    { name = "openai" },
     { name = "python-dotenv" },
     { name = "websockets" },
 ]
@@ -427,6 +428,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "anthropic", specifier = ">=0.38.0" },
     { name = "browser-use", specifier = ">=0.1.37" },
+    { name = "openai", specifier = ">=1.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "websockets", specifier = ">=12.0" },
 ]

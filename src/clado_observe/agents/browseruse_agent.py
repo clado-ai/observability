@@ -65,7 +65,7 @@ class BrowserUseAgent:
 
         self._setup_log_capture()
 
-        self.observer = CDPObserver(cdp_url=cdp_url)
+        self.observer = CDPObserver(cdp_url=cdp_url, task=task)
 
         self.browser_session = BrowserSession(
             cdp_url=cdp_url,
@@ -106,17 +106,20 @@ class BrowserUseAgent:
                             if len(clean_msg) > 2000:
                                 return
 
+                            if record.name == "BrowserSession":
+                                trace_type = "tool"
+                            elif self.agent.api_client:
+                                trace_type = self.agent.api_client.detect_trace_type(
+                                    record.name, msg
+                                )
+                            else:
+                                trace_type = "thought"
+
+                            if self.agent.observer:
+                                self.agent.observer.add_log_entry(clean_msg, trace_type)
+
                             if self.agent.api_client and self.agent.api_client.session_id:
-                                if record.name == "BrowserSession":
-                                    trace_type = "tool"
-                                    need_browser_data = True
-                                else:
-                                    trace_type = self.agent.api_client.detect_trace_type(
-                                        record.name, msg
-                                    )
-                                    need_browser_data = (
-                                        trace_type == "tool" or trace_type == "final"
-                                    )
+                                need_browser_data = trace_type == "tool" or trace_type == "final"
                                 try:
                                     asyncio.get_running_loop()
                                 except RuntimeError:
@@ -282,6 +285,12 @@ class BrowserUseAgent:
                             print(f"[DEBUG] Failed to upload video: {e}")
                 except Exception as e:
                     print(f"[DEBUG] Failed to end screencast: {e}")
+
+                try:
+                    vlm_result = loop.run_until_complete(self.observer.run_vlm_evaluation())
+                    print(f"[VLM] Evaluation result: {vlm_result}")
+                except Exception as e:
+                    print(f"[VLM] Failed to run evaluation: {e}")
 
                 self.observer.stop_background()
                 if self.api_client.session_id:

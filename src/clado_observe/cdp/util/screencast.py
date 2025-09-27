@@ -273,10 +273,6 @@ class ScreencastUtil:
             else:
                 total_duration = 0.1
 
-            logger.info(
-                f"Creating video with {len(frame_files)} frames, duration: {total_duration:.2f}s"
-            )
-
             cmd = [
                 "ffmpeg",
                 "-y",
@@ -295,7 +291,7 @@ class ScreencastUtil:
                 "-pix_fmt",
                 "yuv420p",
                 "-vf",
-                "pad=ceil(iw/2)*2:ceil(ih/2)*2",  # Ensure dimensions are even
+                "pad=ceil(iw/2)*2:ceil(ih/2)*2",
                 "-movflags",
                 "+faststart",
                 output_path,

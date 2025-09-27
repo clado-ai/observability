@@ -1,12 +1,14 @@
 import asyncio
+import os
 import threading
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List, Tuple
 
 from .util.base_client import BaseCDPClient
 from .util.target_manager import TargetManager
 from .util.screenshot import ScreenshotUtil
 from .util.screencast import ScreencastUtil
 from .util.dom import DOMUtil
+from ..agents.vlm_evaluator import VLMEvaluator, RunData, EvaluationResult
 
 
 JsonDict = Dict[str, Any]
@@ -23,11 +25,13 @@ class CDPObserver:
     def __init__(
         self,
         cdp_url: str,
+        task: str,
     ) -> None:
         if not cdp_url or not isinstance(cdp_url, str):
             raise ValueError("cdp_url must be a non-empty string")
 
         self.cdp_url = cdp_url
+        self.task = task
 
         self.client = BaseCDPClient(cdp_url)
         self.target_manager = TargetManager(self.client)
@@ -36,6 +40,10 @@ class CDPObserver:
         self.dom_util = DOMUtil(self.client)
 
         self._bg_thread: Optional[threading.Thread] = None
+
+        self.collected_screenshots: List[str] = []
+        self.collected_logs: List[Tuple[str, str]] = []
+        self.final_result: Optional[str] = None
 
     async def start(self) -> None:
         """Connect and start receiving events. Also schedules periodic tasks."""
@@ -138,6 +146,10 @@ class CDPObserver:
 
             session_id = next(iter(session_ids.values()))
             screenshot_data = await self.screenshot_util.capture_screenshot(session_id=session_id)
+
+            if screenshot_data:
+                self.collected_screenshots.append(screenshot_data)
+
             return screenshot_data
         except Exception as e:
             print(f"[ERROR] Failed to capture screenshot: {e}")
@@ -193,3 +205,56 @@ class CDPObserver:
                                 )
                 except Exception as e:
                     print(f"[DEBUG] Error handling target creation: {e}")
+
+    def add_log_entry(self, log_entry: str, log_type: str) -> None:
+        """Add a log entry for VLM evaluation.
+
+        Args:
+            log_entry: The log message to collect
+            log_type: Type of log (e.g., 'action', 'eval', 'tool', 'thought', 'final')
+        """
+        if not log_entry:
+            return
+
+        if not log_type:
+            raise ValueError("log_type must be provided")
+
+        self.collected_logs.append((log_entry, log_type))
+
+        if log_type == "final":
+            self.final_result = log_entry
+
+    async def run_vlm_evaluation(self) -> EvaluationResult | None:
+        """Run VLM evaluation on collected data."""
+        openai_api_key = os.environ.get("OPENAI_API_KEY")
+        if not openai_api_key:
+            print("[VLM] Skipping evaluation - OPENAI_API_KEY not found in environment")
+            return None
+
+        if not self.task:
+            print("[VLM] No task specified for evaluation")
+            return None
+
+        if not self.collected_screenshots and not self.collected_logs:
+            print("[VLM] No data collected for evaluation")
+            return None
+
+        try:
+            evaluator = VLMEvaluator(api_key=openai_api_key)
+
+            run_data = RunData(
+                task=self.task,
+                screenshots=self.collected_screenshots,
+                logs=self.collected_logs,
+                final_result=self.final_result,
+            )
+
+            result = await evaluator.evaluate_run(run_data)
+            return result
+
+        except Exception as e:
+            print(f"[VLM] Error during evaluation: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return None
