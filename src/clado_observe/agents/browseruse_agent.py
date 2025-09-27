@@ -245,7 +245,6 @@ class BrowserUseAgent:
                 print(f"[API] Failed to create session: {e}")
 
             self.observer.start_background()
-            time.sleep(1.0)
 
             try:
                 loop.run_until_complete(self.observer.start_screencast())
@@ -280,7 +279,6 @@ class BrowserUseAgent:
                 except Exception as e:
                     print(f"[DEBUG] Failed to end screencast: {e}")
 
-                time.sleep(1.0)
                 self.observer.stop_background()
                 if self.api_client.session_id:
                     try:
@@ -288,7 +286,6 @@ class BrowserUseAgent:
                     except Exception as e:
                         print(f"[API] Failed to end session: {e}")
 
-                time.sleep(0.5)
                 try:
                     loop.run_until_complete(self.api_client.close())
                 except Exception:

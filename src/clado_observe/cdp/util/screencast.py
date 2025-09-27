@@ -4,7 +4,6 @@ Screencast Utility
 Handles screencast recording functionality including frame capture and video creation.
 """
 
-import asyncio
 import base64
 import logging
 import os
@@ -84,7 +83,6 @@ class ScreencastUtil:
             Path to the created video file, or None if no video was created
         """
         try:
-            await asyncio.sleep(0.5)
             for target_id, session_id in self.client.get_session_ids().items():
                 await self.client.send(
                     "Page.stopScreencast",

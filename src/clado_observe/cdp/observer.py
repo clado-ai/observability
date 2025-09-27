@@ -52,7 +52,7 @@ class CDPObserver:
                 "Target.createTarget", params={"url": "https://www.google.com"}, expect_result=False
             )
 
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(0.5)
             await self.target_manager.attach_to_all_page_targets()
             session_count = len(self.client.get_session_ids())
             if session_count > 0 and self.screencast_util._screencast_recording:
