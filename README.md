@@ -1,14 +1,13 @@
 # Clado Observe
 
-A Python SDK for browser automation and observability using Chrome DevTools Protocol (CDP).
+A Python SDK for browser agent observability using Chrome DevTools Protocol (CDP).
 
 ## Features
 
-- Browser automation through Chrome DevTools Protocol
-- Integration with Browser Use agents
+- Browser agent observability through Chrome DevTools Protocol
+- Integration with Browser Use
 - WebSocket-based communication with Chrome instances
-- Screenshot and screencast capabilities
-- DOM manipulation and observation
+- DOM, Network, Screenshot and screencast capabilities
 - Vision-Language Model (VLM) evaluation support
 
 ## Installation
