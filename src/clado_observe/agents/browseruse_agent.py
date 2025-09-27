@@ -3,9 +3,9 @@ import logging
 import time
 
 from browser_use.agent.service import Agent
-from browser_use.llm import LLM
+from browser_use.llm import BaseChatModel
 
-from .observer import CDPObserver
+from ..cdp.observer import CDPObserver
 
 
 class BrowserUseAgent:
@@ -18,7 +18,7 @@ class BrowserUseAgent:
     def __init__(
         self,
         task: str,
-        llm: LLM,
+        llm: BaseChatModel,
         cdp_url: str,
         **agent_kwargs,
     ) -> None:
@@ -35,8 +35,8 @@ class BrowserUseAgent:
             raise ValueError("task must be a non-empty string")
         if not cdp_url or not isinstance(cdp_url, str):
             raise ValueError("cdp_url must be a non-empty string")
-        if not llm or not isinstance(llm, LLM):
-            raise ValueError("llm must be a non-empty BrowserUse LLM")
+        if not llm or not isinstance(llm, BaseChatModel):
+            raise ValueError("llm must be a non-empty BrowserUse BaseChatModel")
 
         self.cdp_url = cdp_url
 
