@@ -194,7 +194,7 @@ class Agent:
                                 screenshot_future = asyncio.run_coroutine_threadsafe(
                                     self.observer.screenshot(), self.observer.client._loop
                                 )
-                                screenshot = screenshot_future.result(timeout=5.0)
+                                screenshot = screenshot_future.result(timeout=10.0)
 
                                 if screenshot:
                                     await self.api_client.upload_media(
