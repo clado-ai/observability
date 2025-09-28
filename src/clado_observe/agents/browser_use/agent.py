@@ -96,7 +96,7 @@ class Agent:
                     if (
                         record.levelno == logging.INFO
                         and record.name
-                        and record.name in ["Agent", "tools", "BrowserSession", "service"]
+                        and record.name in ["Agent", "tools", "BrowserSession"]
                     ):
                         clean_msg = re.sub(r"^(INFO|WARNING|ERROR|DEBUG)\s+\[[\w.]+\]\s*", "", msg)
                         clean_msg = re.sub(r"\x1b\[[0-9;]*m", "", clean_msg)
