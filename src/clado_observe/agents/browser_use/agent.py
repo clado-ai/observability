@@ -13,7 +13,7 @@ from browser_use.browser.session import BrowserSession
 from browser_use.llm import BaseChatModel
 
 from ...cdp.observer import CDPObserver
-from ...utils.api_client import APIClient
+from ...utils.api_client import APIClient, TraceType
 
 
 class Agent:
@@ -80,6 +80,36 @@ class Agent:
             **agent_kwargs,
         )
 
+    def detect_trace_type(self, log_name: str, message: str) -> TraceType:
+        """
+        Detect the type of trace based on log name and message content.
+
+        Args:
+            log_name: The logger name (e.g., 'Agent', 'tools')
+            message: The log message content
+
+        Returns:
+            The detected trace type
+        """
+        clean_msg = re.sub(r"^(INFO|WARNING|ERROR|DEBUG)\s+\[[\w.]+\]\s+", "", message).strip()
+
+        if log_name == "tools":
+            return "tool"
+
+        if "Eval:" in clean_msg or "👍 Eval:" in clean_msg or "❔ Eval:" in clean_msg:
+            return "eval"
+
+        if "[ACTION" in clean_msg or "🦾" in clean_msg:
+            return "action"
+
+        if "Final Result:" in clean_msg or "📄  Final Result:" in clean_msg:
+            return "final"
+
+        if log_name == "Agent":
+            return "thought"
+
+        return "thought"
+
     def _setup_log_capture(self) -> None:
         """Setup log capture for browser-use agent logs using Python logging handlers."""
 
@@ -108,18 +138,18 @@ class Agent:
 
                             if record.name == "BrowserSession":
                                 trace_type = "tool"
-                            elif self.agent.api_client:
-                                trace_type = self.agent.api_client.detect_trace_type(
-                                    record.name, msg
-                                )
                             else:
-                                trace_type = "thought"
+                                trace_type = self.agent.detect_trace_type(record.name, msg)
 
                             if self.agent.observer:
                                 self.agent.observer.add_log_entry(clean_msg, trace_type)
 
-                            if self.agent.api_client and self.agent.api_client.session_id:
-                                need_browser_data = trace_type == "tool" or trace_type == "final"
+                            if (
+                                self.agent.api_client
+                                and self.agent.api_client.session_id
+                                and trace_type != "final"
+                            ):
+                                need_browser_data = trace_type == "tool"
                                 try:
                                     asyncio.get_running_loop()
                                 except RuntimeError:
@@ -282,6 +312,25 @@ class Agent:
                 try:
                     vlm_result = loop.run_until_complete(self.observer.run_vlm_evaluation())
                     print(f"[VLM] Evaluation result: {vlm_result}")
+
+                    if vlm_result:
+                        if hasattr(vlm_result, "model_dump"):
+                            evaluation_dict = vlm_result.model_dump()
+                        elif isinstance(vlm_result, dict):
+                            evaluation_dict = vlm_result
+                        else:
+                            evaluation_dict = {"result": str(vlm_result)}
+
+                        final_result_text = (
+                            self.observer.final_result
+                            if self.observer.final_result
+                            else "No final result captured"
+                        )
+                        loop.run_until_complete(
+                            self.api_client.update_session(
+                                evaluation=evaluation_dict, result=final_result_text
+                            )
+                        )
                 except Exception as e:
                     print(f"[VLM] Failed to run evaluation: {e}")
 

@@ -1,14 +1,13 @@
 import aiohttp
 import asyncio
 import json
-import re
 from typing import Any, Dict, Optional, Literal, Union
 from dataclasses import dataclass
 import logging
 
 logging.getLogger("aiohttp").setLevel(logging.WARNING)
 
-TraceType = Literal["dom", "action", "eval", "final", "tool", "thought", "network"]
+TraceType = Literal["dom", "action", "eval", "tool", "thought", "network", "final"]
 TraceResponse = Dict[str, Union[str, int]]
 
 
@@ -212,7 +211,7 @@ class APIClient:
         Create a trace entry.
 
         Args:
-            trace_type: Type of trace (dom, action, eval, final, tool, thought)
+            trace_type: Type of trace (dom, action, eval, tool, thought, network)
             content: The trace content
             session_id: The session ID (uses current session if not provided)
 
@@ -235,32 +234,37 @@ class APIClient:
                 print(f"[API] Failed to create trace: {response.status} - {error}")
                 return {}
 
-    def detect_trace_type(self, log_name: str, message: str) -> TraceType:
+    async def update_session(
+        self, evaluation: Dict[str, Any], result: str, session_id: Optional[str] = None
+    ) -> bool:
         """
-        Detect the type of trace based on log name and message content.
+        Update session with evaluation results and final result.
 
         Args:
-            log_name: The logger name (e.g., 'Agent', 'tools')
-            message: The log message content
+            evaluation: The evaluation data from VLM evaluator
+            result: The final result string
+            session_id: The session ID (uses current session if not provided)
 
         Returns:
-            The detected trace type
+            True if successful, False otherwise
         """
-        clean_msg = re.sub(r"^(INFO|WARNING|ERROR|DEBUG)\s+\[[\w.]+\]\s+", "", message).strip()
+        sid = session_id or self.session_id
+        if not sid:
+            raise ValueError("No session ID provided or set")
 
-        if log_name == "tools":
-            return "tool"
+        url = f"{self.base_url}/session/{sid}/update"
+        payload = {"evaluation": evaluation, "result": result}
 
-        if "Eval:" in clean_msg or "👍 Eval:" in clean_msg or "❔ Eval:" in clean_msg:
-            return "eval"
-
-        if "[ACTION" in clean_msg or "🦾" in clean_msg:
-            return "action"
-
-        if "Final Result:" in clean_msg or "📄  Final Result:" in clean_msg:
-            return "final"
-
-        if log_name == "Agent":
-            return "thought"
-
-        return "thought"
+        try:
+            client = await self._get_session()
+            async with client.post(url, headers=self.headers, json=payload) as response:
+                if response.status == 200:
+                    print("[API] Updated session with evaluation and result")
+                    return True
+                else:
+                    error = await response.text()
+                    print(f"[API] Failed to update session: {response.status} - {error}")
+                    return False
+        except Exception as e:
+            print(f"[API] Error updating session: {e}")
+            return False
