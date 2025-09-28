@@ -38,7 +38,7 @@ class Agent:
             task: The task description for the browser-use agent
             llm: The language model to use for the agent
             cdp_url: The CDP WebSocket URL to connect to
-            api_key: API key for the observability API (localhost:3000)
+            api_key: API key for the observability API
             **agent_kwargs: Additional arguments passed to the browser-use Agent
         """
         if not task or not isinstance(task, str):

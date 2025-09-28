@@ -23,7 +23,7 @@ class Session:
 
 
 class APIClient:
-    """Client for interacting with the observability API at localhost:3000"""
+    """Client for interacting with the observability API at ingestion.clado.ai"""
 
     def __init__(self, api_key: str, skip_verification: bool = False):
         """
@@ -36,7 +36,7 @@ class APIClient:
         Raises:
             Exception: If the API key is invalid (when skip_verification is False)
         """
-        self.base_url = "http://localhost:3000"
+        self.base_url = "https://ingestion.clado.ai"
         self.api_key = api_key
         self.headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         self.session_id: Optional[str] = None

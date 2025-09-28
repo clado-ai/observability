@@ -70,10 +70,12 @@ ws://localhost:9222/devtools/browser/<some-guid>
 #### 3) Set your `.env`
 
 Create or update `.env` with your keys and the copied URL:
+OPENAI_API_KEY is necessary for the VLM evaluation and another API key is needed in accordance to the browser use environment variable configuration.
 
 ```bash
-ANTHROPIC_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-... 
 WEBSOCKET_DEBUGGER_URL=ws://localhost:9222/devtools/browser/<some-guid>
+OPENAI_API_KEY=sk-proj-...
 ```
 
 ## Documentation
