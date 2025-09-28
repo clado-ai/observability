@@ -1,6 +1,6 @@
 [project]
 name = "clado-observe"
-version = "0.1.0"
+version = "0.1.1"
 description = "Clado Observe"
 readme = "README.md"
 authors = [{ name = "Clado", email = "david@clado.ai" }]
