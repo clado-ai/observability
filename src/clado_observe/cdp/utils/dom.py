@@ -5,6 +5,7 @@ Handles DOM snapshot capture functionality using CDP DOMSnapshot with enhanced p
 for visibility, clickability, cursor styles, and other layout information.
 """
 
+import asyncio
 import logging
 from typing import Any, Dict, Optional, List
 
@@ -38,10 +39,7 @@ class DOMUtil:
     def __init__(self, client: BaseCDPClient) -> None:
         self.client = client
 
-    async def capture_snapshot(
-        self,
-        session_id: Optional[str] = None,
-    ) -> SnapshotLookup:
+    async def capture_snapshot(self, session_id: Optional[str] = None) -> SnapshotLookup:
         """
         Capture a DOM snapshot and return the enhanced optimized result.
 
@@ -51,27 +49,46 @@ class DOMUtil:
         Returns:
             Dictionary mapping snapshot index to enhanced node data
         """
-        try:
-            params: Dict[str, Any] = {
-                "computedStyles": REQUIRED_COMPUTED_STYLES,
-                "includeEventListeners": True,
-            }
+        max_retries = 2
+        timeout_seconds = 3.0
+        for attempt in range(max_retries + 1):
+            try:
+                params: Dict[str, Any] = {
+                    "computedStyles": REQUIRED_COMPUTED_STYLES,
+                    "includeEventListeners": True,
+                }
 
-            fut = await self.client.send(
-                "DOMSnapshot.captureSnapshot",
-                params=params,
-                expect_result=True,
-                session_id=session_id,
-            )
-            assert fut is not None
-            msg = await fut  # type: ignore
-            raw_snapshot = msg.get("result", {})
+                fut = await self.client.send(
+                    "DOMSnapshot.captureSnapshot",
+                    params=params,
+                    expect_result=True,
+                    session_id=session_id,
+                )
+                assert fut is not None
 
-            enhanced_snapshot = self.build_enhanced_snapshot_lookup(raw_snapshot)
-            return enhanced_snapshot
-        except Exception as e:
-            logger.error(f"Failed to capture DOM snapshot: {e}")
-            return {}
+                msg = await asyncio.wait_for(fut, timeout=timeout_seconds)
+                raw_snapshot = msg.get("result", {})
+
+                enhanced_snapshot = self.build_enhanced_snapshot_lookup(raw_snapshot)
+                logger.debug(f"DOM snapshot captured successfully on attempt {attempt + 1}")
+                return enhanced_snapshot
+
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"DOM snapshot capture timed out on attempt {attempt + 1}/{max_retries + 1}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"DOM snapshot capture failed on attempt {attempt + 1}/{max_retries + 1}: {e}"
+                )
+
+            if attempt < max_retries:
+                backoff_delay = min(1 + attempt * 0.5, 3)  # Much faster backoff: 1s, 1.5s, 2s max
+                logger.debug(f"Waiting {backoff_delay}s before retry...")
+                await asyncio.sleep(backoff_delay)
+
+        logger.error(f"Failed to capture DOM snapshot after {max_retries + 1} attempts")
+        return {}
 
     async def capture_snapshot_from_all_pages(
         self,
@@ -270,10 +287,7 @@ class DOMUtil:
 
         return snapshot_lookup
 
-    async def capture_raw_snapshot(
-        self,
-        session_id: Optional[str] = None,
-    ) -> RawSnapshot:
+    async def capture_raw_snapshot(self, session_id: Optional[str] = None) -> RawSnapshot:
         """
         Capture a raw DOM snapshot without enhancement processing.
 
@@ -283,22 +297,39 @@ class DOMUtil:
         Returns:
             Raw DOM snapshot data from CDP
         """
-        try:
-            params: Dict[str, Any] = {
-                "computedStyles": REQUIRED_COMPUTED_STYLES,
-                "includeEventListeners": True,
-            }
+        max_retries = 2
+        timeout_seconds = 3.0
+        for attempt in range(max_retries + 1):
+            try:
+                params: Dict[str, Any] = {
+                    "computedStyles": REQUIRED_COMPUTED_STYLES,
+                    "includeEventListeners": True,
+                }
 
-            fut = await self.client.send(
-                "DOMSnapshot.captureSnapshot",
-                params=params,
-                expect_result=True,
-                session_id=session_id,
-            )
-            assert fut is not None
-            msg = await fut
-            raw_snapshot = msg.get("result", {})
-            return raw_snapshot
-        except Exception as e:
-            logger.error(f"Failed to capture raw DOM snapshot: {e}")
-            return {}
+                fut = await self.client.send(
+                    "DOMSnapshot.captureSnapshot",
+                    params=params,
+                    expect_result=True,
+                    session_id=session_id,
+                )
+                assert fut is not None
+
+                msg = await asyncio.wait_for(fut, timeout=timeout_seconds)
+                raw_snapshot = msg.get("result", {})
+                return raw_snapshot
+
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Raw DOM snapshot capture timed out on attempt {attempt + 1}/{max_retries + 1}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Raw DOM snapshot capture failed on attempt {attempt + 1}/{max_retries + 1}: {e}"
+                )
+
+            if attempt < max_retries:
+                backoff_delay = min(1 + attempt * 0.5, 3)
+                await asyncio.sleep(backoff_delay)
+
+        logger.error(f"Failed to capture raw DOM snapshot after {max_retries + 1} attempts")
+        return {}

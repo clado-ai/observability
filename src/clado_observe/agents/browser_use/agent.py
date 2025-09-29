@@ -110,6 +110,17 @@ class Agent:
 
         return "thought"
 
+    def _capture_browser_data_immediate(self, content: str) -> None:
+        """
+        Capture browser data (screenshots/DOM) immediately when a tool action occurs.
+        This runs in the main thread and schedules async capture in the background.
+        """
+        if not self.observer:
+            self._trace_queue.put(("tool", content, False))
+            return
+
+        self._trace_queue.put(("tool", content, True))
+
     def _setup_log_capture(self) -> None:
         """Setup log capture for browser-use agent logs using Python logging handlers."""
 
@@ -155,9 +166,10 @@ class Agent:
                                 except RuntimeError:
                                     pass
 
-                                self.agent._trace_queue.put(
-                                    (trace_type, clean_msg, need_browser_data)
-                                )
+                                if need_browser_data:
+                                    self.agent._capture_browser_data_immediate(clean_msg)
+                                else:
+                                    self.agent._trace_queue.put((trace_type, clean_msg, False))
 
                 except Exception as e:
                     print(f"[DEBUG CAPTURE ERROR] {e}")
@@ -194,25 +206,38 @@ class Agent:
                                 if not self.api_client.session_id:
                                     return
 
-                                screenshot_future = asyncio.run_coroutine_threadsafe(
-                                    self.observer.screenshot(), self.observer.client._loop
+                                timeout = 5.0
+
+                                screenshot = await asyncio.wait_for(
+                                    self.observer.screenshot(), timeout=timeout
                                 )
-                                screenshot = screenshot_future.result(timeout=10.0)
 
                                 if screenshot:
                                     await self.api_client.upload_media(
                                         media_type="image", data=screenshot
                                     )
 
-                                dom_future = asyncio.run_coroutine_threadsafe(
-                                    self.observer.snapshot(), self.observer.client._loop
+                                dom_data = await asyncio.wait_for(
+                                    self.observer.snapshot(), timeout=timeout
                                 )
-                                dom_data = dom_future.result(timeout=10.0)
 
-                                await self.api_client.create_trace("dom", content=str(dom_data))
+                                dom_str = str(dom_data)
+                                if len(dom_str) > 10000:
+                                    dom_str = (
+                                        dom_str[:10000]
+                                        + f"... [truncated {len(dom_str) - 10000} chars]"
+                                    )
+                                    print(
+                                        f"[DEBUG] DOM data compressed from {len(str(dom_data))} to {len(dom_str)} chars"
+                                    )
+
+                                await self.api_client.create_trace("dom", content=dom_str)
                                 await self.api_client.create_trace("tool", content=content)
 
                             except (TimeoutError, asyncio.CancelledError):
+                                print(
+                                    "[WARNING] Browser data capture timed out, sending trace without screenshot/DOM"
+                                )
                                 try:
                                     await self.api_client.create_trace("tool", content=content)
                                 except Exception as trace_e:
@@ -222,6 +247,10 @@ class Agent:
                                 import traceback
 
                                 traceback.print_exc()
+                                try:
+                                    await self.api_client.create_trace("tool", content=content)
+                                except Exception as trace_e:
+                                    print(f"[DEBUG] Failed to send fallback trace: {trace_e}")
                         else:
                             if not self.api_client.session_id:
                                 return
@@ -319,6 +348,8 @@ class Agent:
                             print(f"[DEBUG] Failed to upload video: {e}")
                 except Exception as e:
                     print(f"[DEBUG] Failed to end screencast: {e}")
+
+                time.sleep(2.0)
 
                 try:
                     vlm_result = loop.run_until_complete(self.observer.run_vlm_evaluation())

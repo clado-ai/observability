@@ -32,15 +32,19 @@ class CDPObserver:
     ) -> None:
         if not cdp_url or not isinstance(cdp_url, str):
             raise ValueError("cdp_url must be a non-empty string")
+        if not task or not isinstance(task, str):
+            raise ValueError("task must be a non-empty string")
 
         self.cdp_url = cdp_url
         self.task = task
         self.api_client = api_client
 
         self.client = BaseCDPClient(cdp_url)
+        self.screencast_client = BaseCDPClient(cdp_url)
+
         self.target_manager = TargetManager(self.client)
         self.screenshot_util = ScreenshotUtil(self.client)
-        self.screencast_util = ScreencastUtil(self.client)
+        self.screencast_util = ScreencastUtil(self.screencast_client)  # Use dedicated client
         self.dom_util = DOMUtil(self.client)
         self.network_util = NetworkUtil(self.client, capture_bodies=False)
 
@@ -52,11 +56,12 @@ class CDPObserver:
 
     async def start(self) -> None:
         """Connect and start receiving events. Also schedules periodic tasks."""
-        if self.client._ws is not None:
-            return
+        if self.client._stop_event is None:
+            self.client._stop_event = asyncio.Event()
+            self.client._loop = asyncio.get_running_loop()
 
-        await self.client.connect()
-        await self.target_manager.attach_to_all_page_targets()
+        print("[DEBUG] Using ephemeral connection mode - will connect on-demand for captures")
+        return
 
         session_count = len(self.client.get_session_ids())
         if session_count == 0:
@@ -84,7 +89,9 @@ class CDPObserver:
 
     async def stop(self) -> None:
         """Stop tasks and close the WebSocket."""
-        await self.client.disconnect()
+        # Disconnect ephemeral client if it's still connected
+        if self.client._ws is not None:
+            await self.client.disconnect()
 
     def start_background(self) -> None:
         """Start the observer in a background thread with its own event loop."""
@@ -129,26 +136,50 @@ class CDPObserver:
             self._bg_thread.join(timeout=timeout_s)
 
     async def snapshot(self) -> SnapshotData:
-        """Capture a DOM snapshot and return the enhanced result with ALL elements."""
+        """Capture a DOM snapshot with ephemeral connection."""
+        connection_made = False
         try:
+            if self.client._ws is None:
+                await self.client.connect()
+                connection_made = True
+                await self.target_manager.attach_to_all_page_targets()
+
             session_ids = self.client.get_session_ids()
             if not session_ids:
-                print("[ERROR] No page sessions available for DOM snapshot")
+                print("[WARNING] No page sessions available for DOM snapshot")
                 return {}
 
             session_id = next(iter(session_ids.values()))
             result = await self.dom_util.capture_snapshot(session_id=session_id)
+
+            if result:
+                print("[DEBUG] DOM snapshot captured successfully with ephemeral connection")
+            else:
+                print("[WARNING] DOM snapshot returned no data")
+
             return result
         except Exception as e:
-            print(f"[ERROR] Failed to capture snapshot: {e}")
+            print(f"[WARNING] DOM snapshot capture failed: {e}")
             return {}
+        finally:
+            if connection_made and self.client._ws is not None:
+                try:
+                    await self.client.disconnect()
+                except Exception:
+                    pass
 
     async def screenshot(self) -> Optional[str]:
-        """Capture a screenshot and return the base64 encoded image data."""
+        """Capture a screenshot with ephemeral connection."""
+        connection_made = False
         try:
+            if self.client._ws is None:
+                await self.client.connect()
+                connection_made = True
+                await self.target_manager.attach_to_all_page_targets()
+
             session_ids = self.client.get_session_ids()
             if not session_ids:
-                print("[ERROR] No page sessions available for screenshot")
+                print("[WARNING] No page sessions available for screenshot")
                 return None
 
             session_id = next(iter(session_ids.values()))
@@ -156,14 +187,54 @@ class CDPObserver:
 
             if screenshot_data:
                 self.collected_screenshots.append(screenshot_data)
-
-            return screenshot_data
+                print("[DEBUG] Screenshot captured successfully with ephemeral connection")
+                return screenshot_data
+            else:
+                print("[WARNING] Screenshot capture returned no data")
+                return None
         except Exception as e:
-            print(f"[ERROR] Failed to capture screenshot: {e}")
+            print(f"[WARNING] Screenshot capture failed: {e}")
             return None
+        finally:
+            if connection_made and self.client._ws is not None:
+                try:
+                    await self.client.disconnect()
+                except Exception:
+                    pass
+
+    async def _start_screencast_connection(self) -> None:
+        """Start the dedicated screencast CDP connection."""
+        try:
+            if self.screencast_client._ws is None:
+                print("[DEBUG] Starting dedicated screencast CDP connection...")
+                await self.screencast_client.connect()
+
+                target_manager = TargetManager(self.screencast_client)
+                await target_manager.attach_to_all_page_targets()
+
+                for target_id, session_id in self.screencast_client.get_session_ids().items():
+                    await self.screencast_client.send("Page.enable", session_id=session_id)
+                    await self.screencast_client.send("Network.enable", session_id=session_id)
+
+                self.screencast_client._event_handler = self._handle_event
+
+                print("[DEBUG] Screencast connection established successfully with event handler")
+        except Exception as e:
+            print(f"[WARNING] Failed to start screencast connection: {e}")
+
+    async def _stop_screencast_connection(self) -> None:
+        """Stop the dedicated screencast CDP connection."""
+        try:
+            if self.screencast_client._ws is not None:
+                print("[DEBUG] Stopping dedicated screencast CDP connection...")
+                self.screencast_client._event_handler = None
+                await self.screencast_client.disconnect()
+        except Exception as e:
+            print(f"[WARNING] Failed to stop screencast connection: {e}")
 
     async def start_screencast(self) -> None:
         """Start screencast recording."""
+        await self._start_screencast_connection()
         await self.screencast_util.start_screencast()
 
     async def end_screencast(self) -> Optional[str]:
@@ -172,7 +243,11 @@ class CDPObserver:
         Returns:
             Path to the created video file, or None if no video was created
         """
-        return await self.screencast_util.end_screencast()
+        try:
+            video_path = await self.screencast_util.end_screencast()
+            return video_path
+        finally:
+            await self._stop_screencast_connection()
 
     async def _handle_event(self, msg: CDPMessage) -> None:
         """

@@ -4,6 +4,7 @@ Screenshot Utility
 Handles screenshot capture functionality using CDP Page.captureScreenshot.
 """
 
+import asyncio
 import logging
 from typing import Any, Dict, Optional, TypedDict, cast
 
@@ -46,29 +47,50 @@ class ScreenshotUtil:
         Returns:
             Data URI formatted base64 image data (data:image/png;base64,...) or None if failed
         """
-        try:
-            params: ScreenshotParams = {
-                "format": "png",
-                "quality": 60,
-            }
+        max_retries = 2
+        timeout_seconds = 2.0
 
-            fut = await self.client.send(
-                "Page.captureScreenshot",
-                params=cast(Dict[str, Any], params),
-                expect_result=True,
-                session_id=session_id,
-            )
-            assert fut is not None
-            msg = await fut  # type: ignore
-            result = msg.get("result", {})
-            screenshot_data = result.get("data")
-            if screenshot_data:
-                logger.debug("Screenshot captured successfully")
-                return f"data:image/png;base64,{screenshot_data}"
-            return None
-        except Exception as e:
-            logger.error(f"Failed to capture screenshot: {e}")
-            return None
+        for attempt in range(max_retries + 1):
+            try:
+                params: ScreenshotParams = {
+                    "format": "png",
+                    "quality": 60,
+                }
+
+                fut = await self.client.send(
+                    "Page.captureScreenshot",
+                    params=cast(Dict[str, Any], params),
+                    expect_result=True,
+                    session_id=session_id,
+                )
+                assert fut is not None
+
+                msg = await asyncio.wait_for(fut, timeout=timeout_seconds)
+                result = msg.get("result", {})
+                screenshot_data = result.get("data")
+                if screenshot_data:
+                    logger.debug(f"Screenshot captured successfully on attempt {attempt + 1}")
+                    return f"data:image/png;base64,{screenshot_data}"
+
+                logger.warning(f"Screenshot capture returned no data on attempt {attempt + 1}")
+
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Screenshot capture timed out on attempt {attempt + 1}/{max_retries + 1}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Screenshot capture failed on attempt {attempt + 1}/{max_retries + 1}: {e}"
+                )
+
+            # Don't wait after the last attempt
+            if attempt < max_retries:
+                backoff_delay = min(1 + attempt * 0.5, 3)  # Much faster backoff: 1s, 1.5s, 2s max
+                logger.debug(f"Waiting {backoff_delay}s before retry...")
+                await asyncio.sleep(backoff_delay)
+
+        logger.error(f"Failed to capture screenshot after {max_retries + 1} attempts")
+        return None
 
     async def capture_screenshot_from_all_pages(self) -> Dict[str, Optional[str]]:
         """
@@ -84,9 +106,7 @@ class ScreenshotUtil:
         return screenshots
 
     async def capture_element_screenshot(
-        self,
-        element_id: str,
-        session_id: Optional[str] = None,
+        self, element_id: str, session_id: Optional[str] = None
     ) -> Optional[str]:
         """
         Capture a screenshot of a specific DOM element.
@@ -98,27 +118,52 @@ class ScreenshotUtil:
         Returns:
             Data URI formatted base64 image data (data:image/png;base64,...) or None if failed
         """
-        try:
-            params: ScreenshotParams = {
-                "format": "png",
-                "quality": 60,
-                "clip": {"type": "node", "nodeId": element_id},
-            }
+        max_retries = 2
+        timeout_seconds = 2.0
+        for attempt in range(max_retries + 1):
+            try:
+                params: ScreenshotParams = {
+                    "format": "png",
+                    "quality": 60,
+                    "clip": {"type": "node", "nodeId": element_id},
+                }
 
-            fut = await self.client.send(
-                "Page.captureScreenshot",
-                params=cast(Dict[str, Any], params),
-                expect_result=True,
-                session_id=session_id,
-            )
-            assert fut is not None
-            msg = await fut  # type: ignore
-            result = msg.get("result", {})
-            screenshot_data = result.get("data")
-            if screenshot_data:
-                logger.debug(f"Element screenshot captured successfully for element {element_id}")
-                return f"data:image/png;base64,{screenshot_data}"
-            return None
-        except Exception as e:
-            logger.error(f"Failed to capture element screenshot: {e}")
-            return None
+                fut = await self.client.send(
+                    "Page.captureScreenshot",
+                    params=cast(Dict[str, Any], params),
+                    expect_result=True,
+                    session_id=session_id,
+                )
+                assert fut is not None
+
+                # Add timeout to the future
+                msg = await asyncio.wait_for(fut, timeout=timeout_seconds)
+                result = msg.get("result", {})
+                screenshot_data = result.get("data")
+                if screenshot_data:
+                    logger.debug(
+                        f"Element screenshot captured successfully for element {element_id} on attempt {attempt + 1}"
+                    )
+                    return f"data:image/png;base64,{screenshot_data}"
+
+                logger.warning(
+                    f"Element screenshot capture returned no data on attempt {attempt + 1}"
+                )
+
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Element screenshot capture timed out on attempt {attempt + 1}/{max_retries + 1}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Element screenshot capture failed on attempt {attempt + 1}/{max_retries + 1}: {e}"
+                )
+
+            # Don't wait after the last attempt
+            if attempt < max_retries:
+                backoff_delay = min(1 + attempt * 0.5, 3)  # Much faster backoff: 1s, 1.5s, 2s max
+                logger.debug(f"Waiting {backoff_delay}s before retry...")
+                await asyncio.sleep(backoff_delay)
+
+        logger.error(f"Failed to capture element screenshot after {max_retries + 1} attempts")
+        return None
