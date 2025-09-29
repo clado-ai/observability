@@ -225,14 +225,21 @@ class APIClient:
         url = f"{self.base_url}/session/{sid}/trace"
         payload = {"type": trace_type, "content": content}
 
-        client = await self._get_session()
-        async with client.post(url, headers=self.headers, json=payload) as response:
-            if response.status == 200:
-                return await response.json()
-            else:
-                error = await response.text()
-                print(f"[API] Failed to create trace: {response.status} - {error}")
-                return {}
+        try:
+            client = await self._get_session()
+            async with client.post(url, headers=self.headers, json=payload) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    error = await response.text()
+                    print(f"[API] Failed to create trace: {response.status} - {error}")
+                    return {}
+        except aiohttp.ServerDisconnectedError as e:
+            print(f"[API] Server disconnected during trace creation: {e}")
+            return {}
+        except Exception as e:
+            print(f"[API] Error creating trace: {e}")
+            return {}
 
     async def update_session(
         self, evaluation: Dict[str, Any], result: str, session_id: Optional[str] = None

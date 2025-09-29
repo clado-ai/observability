@@ -113,7 +113,7 @@ class CDPObserver:
         self._bg_thread = threading.Thread(target=_runner, daemon=True)
         self._bg_thread.start()
 
-    def stop_background(self, timeout_s: float = 5.0) -> None:
+    def stop_background(self, timeout_s: float = 20.0) -> None:
         """Signal stop and wait briefly for background to exit."""
         if (
             self.client._loop

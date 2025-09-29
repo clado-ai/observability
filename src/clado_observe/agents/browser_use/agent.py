@@ -191,6 +191,9 @@ class Agent:
                             dom_data = None
 
                             try:
+                                if not self.api_client.session_id:
+                                    return
+
                                 screenshot_future = asyncio.run_coroutine_threadsafe(
                                     self.observer.screenshot(), self.observer.client._loop
                                 )
@@ -204,17 +207,24 @@ class Agent:
                                 dom_future = asyncio.run_coroutine_threadsafe(
                                     self.observer.snapshot(), self.observer.client._loop
                                 )
-                                dom_data = dom_future.result(timeout=5.0)
+                                dom_data = dom_future.result(timeout=10.0)
 
                                 await self.api_client.create_trace("dom", content=str(dom_data))
                                 await self.api_client.create_trace("tool", content=content)
 
+                            except (TimeoutError, asyncio.CancelledError):
+                                try:
+                                    await self.api_client.create_trace("tool", content=content)
+                                except Exception as trace_e:
+                                    print(f"[DEBUG] Failed to send fallback trace: {trace_e}")
                             except Exception as e:
                                 print(f"[DEBUG] Failed to capture screenshot/DOM: {e}")
                                 import traceback
 
                                 traceback.print_exc()
                         else:
+                            if not self.api_client.session_id:
+                                return
                             await self.api_client.create_trace(trace_type, content)
 
                     except Exception as e:
@@ -233,7 +243,7 @@ class Agent:
         if self._trace_loop and self._trace_loop.is_running():
 
             async def cleanup_and_stop():
-                for _ in range(20):
+                for i in range(100):  # 10 seconds total
                     if self._trace_queue.empty():
                         break
                     await asyncio.sleep(0.1)
@@ -242,14 +252,15 @@ class Agent:
                     t for t in asyncio.all_tasks(self._trace_loop) if t != asyncio.current_task()
                 ]
                 if tasks:
+                    for task in tasks:
+                        task.cancel()
                     await asyncio.gather(*tasks, return_exceptions=True)
-                await self.api_client.close()
                 self._trace_loop.stop()
 
             asyncio.run_coroutine_threadsafe(cleanup_and_stop(), self._trace_loop)
 
         if self._trace_thread:
-            self._trace_thread.join(timeout=3)
+            self._trace_thread.join(timeout=15)
 
     def run_sync(self) -> None:
         """
@@ -335,6 +346,12 @@ class Agent:
                     print(f"[VLM] Failed to run evaluation: {e}")
 
                 self.observer.stop_background()
+
+                max_wait_time = 30
+                wait_start = time.time()
+                while not self._trace_queue.empty() and (time.time() - wait_start) < max_wait_time:
+                    time.sleep(0.5)
+
                 if self.api_client.session_id:
                     try:
                         loop.run_until_complete(self.api_client.end_session())
