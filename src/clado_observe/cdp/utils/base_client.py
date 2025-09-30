@@ -51,9 +51,9 @@ class BaseCDPClient:
             self._ws = await websockets.connect(
                 self.cdp_url,
                 max_size=None,
-                ping_interval=20,
-                ping_timeout=10,
-                close_timeout=10,
+                ping_interval=30,
+                ping_timeout=20,
+                close_timeout=15,
             )
         except Exception as e:
             logger.error(f"Failed to connect to CDP URL: {e}")

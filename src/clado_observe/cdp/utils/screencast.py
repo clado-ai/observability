@@ -4,6 +4,7 @@ Screencast Utility
 Handles screencast recording functionality including frame capture and video creation.
 """
 
+import asyncio
 import base64
 import logging
 import os
@@ -58,18 +59,16 @@ class ScreencastUtil:
             viewport_size = await self._get_viewport_size()
 
             screencast_params: Dict[str, Any] = {
-                "format": "png",
-                "quality": 90,
+                "format": "jpeg",
+                "quality": 80,
+                "maxWidth": 1280,
+                "maxHeight": 720,
                 "everyNthFrame": 1,
             }
 
             if viewport_size:
-                screencast_params.update(
-                    {
-                        "maxWidth": min(viewport_size["width"], 1920),
-                        "maxHeight": min(viewport_size["height"], 1080),
-                    }
-                )
+                screencast_params["maxWidth"] = min(viewport_size["width"], 1280)
+                screencast_params["maxHeight"] = min(viewport_size["height"], 720)
             self._screencast_params = screencast_params
 
             sessions = self.client.get_session_ids()
@@ -98,13 +97,14 @@ class ScreencastUtil:
             Path to the created video file, or None if no video was created
         """
         try:
-            for target_id, session_id in self.client.get_session_ids().items():
-                await self.client.send(
-                    "Page.stopScreencast",
-                    session_id=session_id,
-                )
-                logger.debug(f"Screencast stopped on session {session_id}")
+            await asyncio.sleep(0.5)
+            if not self._is_connection_active():
+                logger.warning("CDP connection is not active, skipping screencast stop command")
+            else:
+                await self._stop_screencast_with_retry(max_retries=2, delay=0.5)
 
+            # Wait again after stopping to catch any final frames that may have been in flight
+            await asyncio.sleep(0.3)
             self._screencast_recording = False
 
             if self._screencast_frames:
@@ -116,6 +116,52 @@ class ScreencastUtil:
         except Exception as e:
             logger.error(f"Failed to end screencast: {e}")
             return None
+
+    def _is_connection_active(self) -> bool:
+        """Check if the CDP WebSocket connection is still active."""
+        try:
+            if self.client._ws is None:
+                return False
+            if hasattr(self.client._ws, "closed"):
+                return not self.client._ws.closed
+            return True
+        except Exception as e:
+            logger.debug(f"Error checking connection status: {e}")
+            return False
+
+    async def _stop_screencast_with_retry(self, max_retries: int = 2, delay: float = 0.5) -> None:
+        """Stop screencast with retry logic to handle transient connection issues.
+
+        Args:
+            max_retries: Maximum number of retry attempts
+            delay: Delay in seconds between retries
+        """
+        sessions = self.client.get_session_ids()
+
+        for target_id, session_id in sessions.items():
+            retry_count = 0
+            while retry_count <= max_retries:
+                try:
+                    await self.client.send(
+                        "Page.stopScreencast",
+                        session_id=session_id,
+                    )
+                    logger.debug(f"Screencast stopped on session {session_id}")
+                    break
+
+                except Exception as e:
+                    retry_count += 1
+                    if retry_count <= max_retries:
+                        logger.debug(
+                            f"Failed to stop screencast on session {session_id} "
+                            f"(attempt {retry_count}/{max_retries + 1}): {e}. Retrying..."
+                        )
+                        await asyncio.sleep(delay)
+                    else:
+                        logger.warning(
+                            f"Failed to stop screencast on session {session_id} "
+                            f"after {max_retries + 1} attempts: {e}"
+                        )
 
     async def _get_viewport_size(self) -> Optional[Dict[str, int]]:
         """Get the current viewport size from the first available session."""
@@ -153,8 +199,10 @@ class ScreencastUtil:
                 params={"sessionId": frame_session_id},
                 session_id=session_id,
             )
-        except Exception as e:
-            logger.debug(f"Failed to acknowledge screencast frame: {e}")
+        except Exception:
+            import traceback
+
+            traceback.print_exc()
 
     async def handle_screencast_frame(self, frame_data: dict, session_id: Optional[str]) -> None:
         """Handle incoming screencast frame data."""
@@ -174,12 +222,14 @@ class ScreencastUtil:
                 }
             )
 
-            frame_session_id = frame_data.get("sessionId", "")
+            frame_session_id = frame_data.get("sessionId")
             if frame_session_id and session_id:
                 await self._ack_screencast_frame(frame_session_id, session_id)
 
-        except Exception as e:
-            logger.debug(f"Error capturing screencast frame: {e}")
+        except Exception:
+            import traceback
+
+            traceback.print_exc()
 
     async def _create_video_from_frames(self) -> Optional[str]:
         """Create a video file from captured screencast frames.
@@ -208,9 +258,13 @@ class ScreencastUtil:
 
             frame_files = []
             timestamps = []
+
+            format_ext = self._screencast_params.get("format", "jpeg")
+            if format_ext not in ["jpeg", "png"]:
+                format_ext = "jpeg"
+
             for i, frame_data in enumerate(sorted_frames):
-                ext = "png"
-                frame_path = os.path.join(frames_dir, f"frame_{i:06d}.{ext}")
+                frame_path = os.path.join(frames_dir, f"frame_{i:06d}.{format_ext}")
                 try:
                     image_data = base64.b64decode(frame_data.get("data", ""))
                     with open(frame_path, "wb") as f:

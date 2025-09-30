@@ -227,17 +227,10 @@ class Agent:
                                         dom_str[:10000]
                                         + f"... [truncated {len(dom_str) - 10000} chars]"
                                     )
-                                    print(
-                                        f"[DEBUG] DOM data compressed from {len(str(dom_data))} to {len(dom_str)} chars"
-                                    )
-
                                 await self.api_client.create_trace("dom", content=dom_str)
                                 await self.api_client.create_trace("tool", content=content)
 
                             except (TimeoutError, asyncio.CancelledError):
-                                print(
-                                    "[WARNING] Browser data capture timed out, sending trace without screenshot/DOM"
-                                )
                                 try:
                                     await self.api_client.create_trace("tool", content=content)
                                 except Exception as trace_e:

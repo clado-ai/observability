@@ -44,9 +44,9 @@ class CDPObserver:
 
         self.target_manager = TargetManager(self.client)
         self.screenshot_util = ScreenshotUtil(self.client)
-        self.screencast_util = ScreencastUtil(self.screencast_client)  # Use dedicated client
+        self.screencast_util = ScreencastUtil(self.screencast_client)
         self.dom_util = DOMUtil(self.client)
-        self.network_util = NetworkUtil(self.client, capture_bodies=False)
+        self.network_util = NetworkUtil(self.screencast_client, capture_bodies=False)
 
         self._bg_thread: Optional[threading.Thread] = None
 
@@ -59,8 +59,7 @@ class CDPObserver:
         if self.client._stop_event is None:
             self.client._stop_event = asyncio.Event()
             self.client._loop = asyncio.get_running_loop()
-
-        print("[DEBUG] Using ephemeral connection mode - will connect on-demand for captures")
+        await self._start_screencast_connection_internal()
         return
 
         session_count = len(self.client.get_session_ids())
@@ -89,7 +88,6 @@ class CDPObserver:
 
     async def stop(self) -> None:
         """Stop tasks and close the WebSocket."""
-        # Disconnect ephemeral client if it's still connected
         if self.client._ws is not None:
             await self.client.disconnect()
 
@@ -132,6 +130,20 @@ class CDPObserver:
                 asyncio.run_coroutine_threadsafe(self.stop(), self.client._loop)
             except Exception:
                 pass
+
+        if (
+            self.screencast_client._loop
+            and not self.screencast_client._loop.is_closed()
+            and self.screencast_client._stop_event
+            and not self.screencast_client._stop_event.is_set()
+        ):
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self._stop_screencast_connection(), self.screencast_client._loop
+                )
+            except Exception as e:
+                print(f"[DEBUG] Error stopping screencast connection: {e}")
+
         if self._bg_thread:
             self._bg_thread.join(timeout=timeout_s)
 
@@ -143,7 +155,6 @@ class CDPObserver:
                 await self.client.connect()
                 connection_made = True
                 await self.target_manager.attach_to_all_page_targets()
-
             session_ids = self.client.get_session_ids()
             if not session_ids:
                 print("[WARNING] No page sessions available for DOM snapshot")
@@ -202,19 +213,27 @@ class CDPObserver:
                 except Exception:
                     pass
 
-    async def _start_screencast_connection(self) -> None:
-        """Start the dedicated screencast CDP connection."""
+    async def _start_screencast_connection_internal(self) -> None:
+        """Start the dedicated screencast CDP connection (called from background thread)."""
         try:
             if self.screencast_client._ws is None:
                 print("[DEBUG] Starting dedicated screencast CDP connection...")
                 await self.screencast_client.connect()
-
                 target_manager = TargetManager(self.screencast_client)
                 await target_manager.attach_to_all_page_targets()
+
+                await self.screencast_client.send(
+                    "Target.setDiscoverTargets", params={"discover": True}
+                )
 
                 for target_id, session_id in self.screencast_client.get_session_ids().items():
                     await self.screencast_client.send("Page.enable", session_id=session_id)
                     await self.screencast_client.send("Network.enable", session_id=session_id)
+                    await self.screencast_client.send(
+                        "Page.setLifecycleEventsEnabled",
+                        params={"enabled": True},
+                        session_id=session_id,
+                    )
 
                 self.screencast_client._event_handler = self._handle_event
 
@@ -234,8 +253,16 @@ class CDPObserver:
 
     async def start_screencast(self) -> None:
         """Start screencast recording."""
-        await self._start_screencast_connection()
-        await self.screencast_util.start_screencast()
+        if (
+            self.screencast_client._loop
+            and self.screencast_client._loop != asyncio.get_running_loop()
+        ):
+            future = asyncio.run_coroutine_threadsafe(
+                self.screencast_util.start_screencast(), self.screencast_client._loop
+            )
+            future.result(timeout=10)
+        else:
+            await self.screencast_util.start_screencast()
 
     async def end_screencast(self) -> Optional[str]:
         """Stop screencast recording and create video.
@@ -243,11 +270,21 @@ class CDPObserver:
         Returns:
             Path to the created video file, or None if no video was created
         """
-        try:
+        if (
+            self.screencast_client._loop
+            and self.screencast_client._loop != asyncio.get_running_loop()
+        ):
+            future = asyncio.run_coroutine_threadsafe(
+                self.screencast_util.end_screencast(), self.screencast_client._loop
+            )
+            try:
+                video_path = future.result(timeout=15)
+            except Exception as e:
+                print(f"[SCREENCAST ERROR] Failed to end screencast: {e}")
+                return None
+        else:
             video_path = await self.screencast_util.end_screencast()
-            return video_path
-        finally:
-            await self._stop_screencast_connection()
+        return video_path
 
     async def _handle_event(self, msg: CDPMessage) -> None:
         """
@@ -271,8 +308,10 @@ class CDPObserver:
                             "Network.loadingFailed",
                         ]:
                             request_id = params.get("requestId")
+
                             if request_id:
                                 all_events = self.network_util.get_all_events()
+
                                 for event in all_events:
                                     if event.request_id == request_id:
                                         log_entry = self.network_util.format_network_log(event)
@@ -299,32 +338,62 @@ class CDPObserver:
                         await self.screencast_util.handle_screencast_frame(frame_data, session_id)
                 except Exception as e:
                     print(f"[DEBUG] Error handling screencast frame: {e}")
+                    import traceback
+
+                    traceback.print_exc()
 
             if method == "Target.targetCreated":
                 try:
                     params = msg.get("params", {})
                     if isinstance(params, dict):
                         target_info = params.get("targetInfo", {})
-                    new_page_attached = await self.target_manager.handle_target_created(target_info)
-                    if new_page_attached:
+                        target_type = target_info.get("type")
                         target_id = target_info.get("targetId")
-                        if target_id in self.client.get_session_ids():
-                            session_id = self.client.get_session_ids()[target_id]
-                            await self.target_manager.enable_domains_on_all_sessions()
+                        target_url = target_info.get("url", "")
 
-                            await self.network_util.enable_network_capture(session_id)
+                        if (
+                            target_type == "page"
+                            and not target_url.startswith("chrome://")
+                            and target_id
+                        ):
+                            await self.screencast_client.send(
+                                "Target.attachToTarget",
+                                params={"targetId": target_id, "flatten": True},
+                                expect_result=False,
+                            )
+                except Exception as e:
+                    print(f"[DEBUG] Error handling target creation: {e}")
+
+            if method == "Target.attachedToTarget":
+                try:
+                    params = msg.get("params", {})
+                    if isinstance(params, dict):
+                        session_id = params.get("sessionId")
+                        target_info = params.get("targetInfo", {})
+                        target_id = target_info.get("targetId")
+
+                        if session_id and target_id:
+                            self.screencast_client.add_session(target_id, session_id)
+
+                            await self.screencast_client.send(
+                                "Network.enable", session_id=session_id
+                            )
+                            await self.screencast_client.send("Page.enable", session_id=session_id)
 
                             if (
                                 self.screencast_util._screencast_recording
                                 and self.screencast_util._screencast_params
                             ):
-                                await self.client.send(
+                                await self.screencast_client.send(
                                     "Page.startScreencast",
                                     params=self.screencast_util._screencast_params,
                                     session_id=session_id,
                                 )
                 except Exception as e:
-                    print(f"[DEBUG] Error handling target creation: {e}")
+                    print(f"[DEBUG] Error handling target attached: {e}")
+                    import traceback
+
+                    traceback.print_exc()
 
     def add_log_entry(self, log_entry: str, log_type: str) -> None:
         """Add a log entry for VLM evaluation.
